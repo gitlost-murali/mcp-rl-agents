@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     mcp_bearer_token: str
     openrouter_key: str
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    wandb_api_key: str | None = None
 
     @classmethod
     def load(cls, **kwargs: Any) -> "Settings":  # noqa: D401 – clear enough

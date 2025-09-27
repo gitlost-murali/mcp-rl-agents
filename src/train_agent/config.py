@@ -19,6 +19,7 @@ MAX_TURNS = 10  # Maximum number of turns for the model to generate during one r
 NUM_TEST_INPUTS = 8  # Number of test inputs to generate
 RULER_MODEL = "openrouter/openai/o4-mini"  # Model for RULER evaluation
 INPUT_GENERATION_MODEL = "openai/o3"
+BASE_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 
 # Colab/T4 specific config to avoid OOM errors
 MAX_TURNS = 7  # Decrease the number of turns to avoid OOM errors on a T4
