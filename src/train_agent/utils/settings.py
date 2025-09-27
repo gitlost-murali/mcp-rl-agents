@@ -1,3 +1,4 @@
+from locale import strcoll
 from typing import Any
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -5,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     mcp_url: str
     mcp_bearer_token: str
+    openrouter_key: str
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @classmethod
