@@ -1,13 +1,14 @@
-from locale import strcoll
 from typing import Any
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
     mcp_url: str
     mcp_bearer_token: str
     openrouter_key: str
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
     wandb_api_key: str | None = None
 
     @classmethod
@@ -22,5 +23,6 @@ class Settings(BaseSettings):
             return cls(**kwargs)
         except Exception as exc:
             raise ValueError(exc)
+
 
 settings = Settings.load()

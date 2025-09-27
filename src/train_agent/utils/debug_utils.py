@@ -2,7 +2,6 @@
 
 import json
 import time
-import traceback
 from typing import Any
 
 DEBUG_LOG = True  # flip to False to silence logs

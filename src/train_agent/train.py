@@ -16,8 +16,21 @@ from art.rewards import ruler_score_group
 from art.utils import iterate_dataset
 
 
-from train_agent.config import MODEL_NAME, PROJECT_NAME, MAX_SEQ_LENGTH, GPU_MEMORY_UTILIZATION, MAX_TURNS, TRAINING_CONFIG, RULER_MODEL, BASE_MODEL
-from train_agent.utils.mcp_utils import call_mcp_tool, get_content_text, get_tool_schemas_from_mcp_with_complete_task_tool
+from train_agent.config import (
+    MODEL_NAME,
+    PROJECT_NAME,
+    MAX_SEQ_LENGTH,
+    GPU_MEMORY_UTILIZATION,
+    MAX_TURNS,
+    TRAINING_CONFIG,
+    RULER_MODEL,
+    BASE_MODEL,
+)
+from train_agent.utils.mcp_utils import (
+    call_mcp_tool,
+    get_content_text,
+    get_tool_schemas_from_mcp_with_complete_task_tool,
+)
 from train_agent.utils.settings import settings
 from train_agent.utils.debug_utils import log, log_json
 
@@ -71,11 +84,10 @@ class ModelTrainer:
         print("Base model:", BASE_MODEL)
         print("Model name:", MODEL_NAME)
         print("Project name:", PROJECT_NAME)
-    
+
     async def register_model(self):
         # Register the model with the local Backend
         await self.model.register(self.backend)
-
 
     def create_scenarios(self, raw_train_scenarios: list[dict]):
         return [
@@ -85,7 +97,7 @@ class ModelTrainer:
             )
             for scenario in raw_train_scenarios
         ]
-    
+
     async def create_iterator(self, train_scenarios: list[McpScenario]):
         return iterate_dataset(
             train_scenarios,
@@ -95,7 +107,6 @@ class ModelTrainer:
         )
 
     async def train(self, raw_train_scenarios: list[dict]):
-
         print(
             f"Using config: max_turns={MAX_TURNS}, rollouts_per_group={TRAINING_CONFIG['rollouts_per_group']}, "
             f"groups_per_step={TRAINING_CONFIG['groups_per_step']}, num_epochs={TRAINING_CONFIG['num_epochs']}, "
@@ -158,7 +169,9 @@ async def rollout(
         scenario=scenario,
     )
 
-    tool_schemas: list[ChatCompletionToolParam] = await get_tool_schemas_from_mcp_with_complete_task_tool(mcp_url)
+    tool_schemas: list[
+        ChatCompletionToolParam
+    ] = await get_tool_schemas_from_mcp_with_complete_task_tool(mcp_url)
     traj.tools = tool_schemas
 
     # Initialize conversation
@@ -336,4 +349,3 @@ async def rollout(
     traj.metrics["num_turns"] = num_turns
 
     return traj.finish()
-
