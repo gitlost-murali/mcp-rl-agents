@@ -23,16 +23,16 @@ Transform the ART-dependent prototype into a clean GRPO-based training system us
 - [x] Update imports in config.py to remove ART references
 
 ### Ticket 1.2: Implement vLLM Inference Engine
-- [ ] Create `src/train_agent/inference/__init__.py`
-- [ ] Create `src/train_agent/inference/vllm_engine.py`
-- [ ] Implement VLLMEngine class with initialization
-- [ ] Add batched generation support for parallel rollouts
-- [ ] Add LoRA adapter loading support
-- [ ] Add tokenizer management
-- [ ] Add sampling parameters configuration
-- [ ] Add GPU memory management settings
-- [ ] Test basic inference functionality
-- [ ] Test batched inference functionality
+- [x] Create `src/train_agent/inference/__init__.py`
+- [x] Create `src/train_agent/inference/vllm_engine.py`
+- [x] Implement VLLMEngine class with initialization
+- [x] Add batched generation support for parallel rollouts
+- [x] Add LoRA adapter loading support
+- [x] Add tokenizer management
+- [x] Add sampling parameters configuration
+- [x] Add GPU memory management settings
+- [x] Test basic inference functionality
+- [x] Test batched inference functionality
 
 ### Ticket 1.3: Implement GRPO Algorithm Core
 - [ ] Create `src/train_agent/training/__init__.py`
