@@ -7,9 +7,12 @@ requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.12.15",
     "fastmcp>=2.12.4",
-    "openpipe-art[backend]>=0.4.11",
     "tenacity>=9.1.2",
-    "torchtune @ git+https://github.com/pytorch/torchtune.git@67ab86b94de9e7ac7dd9850113ebe69e2bbd307c",
+    "torch>=2.5.0",
+    "pytorch-lightning>=2.4.0",
+    "transformers>=4.44.0",
+    "peft>=0.12.0",
+    "vllm>=0.6.0",
 ]
 
 [project.scripts]

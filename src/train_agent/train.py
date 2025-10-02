@@ -11,12 +11,6 @@ import torch
 import weave
 from openai import AsyncOpenAI
 
-import art
-from art.local import LocalBackend
-from art.rewards import ruler_score_group
-from art.utils import iterate_dataset
-
-
 from train_agent.config import (
     MODEL_NAME,
     PROJECT_NAME,
