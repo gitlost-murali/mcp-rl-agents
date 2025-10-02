@@ -9,6 +9,8 @@ from train_agent.config import MAX_TURNS
 
 TEST_MODEL = "Qwen/Qwen3-0.6B"
 
+pytestmark = pytest.mark.gpu
+
 
 @pytest.fixture(scope="module")
 def vllm_config():
