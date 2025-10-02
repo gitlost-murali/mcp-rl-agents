@@ -1,11 +1,20 @@
 import asyncio
 import os
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,2,3"
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+
+conf = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "")
+if "expandable_segments:True" in conf:
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = ""  # or set to something benign like "max_split_size_mb:512"
+
 from train_agent.data.dataset_generator import (
     generate_scenarios_from_tools_and_resources,
+    load_train_and_val_scenarios,
     save_train_and_val_scenarios,
     split_scenarios_into_train_and_val,
 )
+from train_agent.train import ModelTrainer
 from train_agent.utils.mcp_utils import (
     convert_tools_and_resources_to_dicts,
     list_tools_and_resources,
@@ -37,6 +46,11 @@ async def generate_dataset_if_not_exists(dataset_filename: str):
 
 async def main():
     await generate_dataset_if_not_exists(DATASET_FILENAME)
+    model_trainer = ModelTrainer()
+    raw_train_scenarios, raw_val_scenarios = load_train_and_val_scenarios(DATASET_FILENAME)
+    
+    await model_trainer.train(raw_train_scenarios)
+    await model_trainer.test(raw_val_scenarios)
 
 
 def cli():

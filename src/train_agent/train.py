@@ -7,6 +7,7 @@ import random
 from dataclasses import dataclass
 import traceback
 
+import torch
 import weave
 from openai import AsyncOpenAI
 
@@ -43,6 +44,11 @@ if settings.wandb_api_key:
 else:
     print("WANDB_API_KEY is not set. We'll skip logging metrics to Weights & Biases.")
 
+if settings.openrouter_key:
+    os.environ["OPENROUTER_API_KEY"] = settings.openrouter_key
+else:
+    raise ValueError("OPENROUTER_KEY is not set. Please set it in the .env file.")
+
 random.seed(42)
 
 
@@ -60,18 +66,22 @@ class ModelTrainer:
             name=MODEL_NAME,
             project=PROJECT_NAME,
             base_model=BASE_MODEL,
+            _internal_config=art.dev.InternalModelConfig(
+                engine_args=art.dev.EngineArgs(
+                    pipeline_parallel_size=torch.cuda.device_count(),  
+                    gpu_memory_utilization=0.8  
+                ),
+                torchtune_args=art.dev.TorchtuneArgs(
+                    model="qwen3_4b_instruct",           
+                    model_type="QWEN3",         
+                    async_weight_syncing=True,
+                    enable_activation_offloading=False
+                ),
+            ),
         )
 
-        # To run on a T4, we need to override some config defaults.
-        self.model._internal_config = art.dev.InternalModelConfig(
-            init_args=art.dev.InitArgs(
-                max_seq_length=MAX_SEQ_LENGTH,
-            ),
-            engine_args=art.dev.EngineArgs(
-                enforce_eager=True,
-                gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
-            ),
-        )
+        # # To run on a T4, we need to override some config defaults.
+        # self.model._internal_config = _internal_config
 
         # Initialize the server
         self.backend = LocalBackend(
@@ -147,7 +157,49 @@ class ModelTrainer:
                 scored_groups,
                 config=art.TrainConfig(learning_rate=TRAINING_CONFIG["learning_rate"]),
             )
+            print("train completed")
+            print(f"Model step: {await self.model.get_step()}")
 
+    async def test(self, raw_val_scenarios: list[dict]):
+
+        # Generate test inputs
+        print("Generating test inputs...")
+        val_scenarios = [
+            McpScenario(
+                task_description=scenario["task"],
+                max_turns=MAX_TURNS,
+            )
+            for scenario in raw_val_scenarios
+        ]
+
+        print(f"\n🧪 Testing the trained model on {len(val_scenarios)} new inputs:\n")
+        print("=" * 80)
+
+        for i, scenario in enumerate(val_scenarios):
+            print(f"\nTest {i + 1}:")
+            print(f"Input: {scenario.task_description}")
+
+            # Run the model
+            result_trajectory = await rollout(self.model, scenario)
+
+            # Extract the model's response
+            messages = result_trajectory.messages()
+            model_response = messages[-1]["content"] if messages else "No response"
+
+            print(f"Model output: {model_response}")
+            print("-" * 80)
+
+        print("\n🎉 Testing completed!")
+        print(
+            f"\nYour model '{MODEL_NAME}' has been trained to use the MCP server at:"
+        )
+        print(settings.mcp_url)
+        print("\nTo use this model in production:")
+        print("1. The model checkpoint is saved in ./.art/")
+        print("2. You can load it using the vLLM library")
+        print(
+            "3. Or continue training with more examples by adjusting the configuration at the top"
+        )
 
 @weave.op()
 async def rollout(

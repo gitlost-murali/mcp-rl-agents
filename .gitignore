@@ -1,3 +1,5 @@
+.art/
+unsloth_compiled_cache/
 data/
 # Python-generated files
 __pycache__/

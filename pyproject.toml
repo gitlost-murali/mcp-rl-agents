@@ -9,6 +9,7 @@ dependencies = [
     "fastmcp>=2.12.4",
     "openpipe-art[backend]>=0.4.11",
     "tenacity>=9.1.2",
+    "torchtune @ git+https://github.com/pytorch/torchtune.git@67ab86b94de9e7ac7dd9850113ebe69e2bbd307c",
 ]
 
 [project.scripts]
