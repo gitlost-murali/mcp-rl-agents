@@ -10,17 +10,17 @@ Transform the ART-dependent prototype into a clean GRPO-based training system us
 
 ## **EPIC 1: Core GRPO Training Infrastructure** (Priority: HIGHEST)
 
-### Ticket 1.1: Remove ART Dependency & Setup Base Architecture
-- [ ] Remove `openpipe-art` from dependencies in pyproject.toml
-- [ ] Add PyTorch Lightning to dependencies
-- [ ] Add Transformers library to dependencies
-- [ ] Add PEFT library to dependencies
-- [ ] Add vLLM to dependencies
-- [ ] Create `src/train_agent/training/` module directory
-- [ ] Create `src/train_agent/inference/` module directory
-- [ ] Create `src/train_agent/rewards/` module directory
-- [ ] Update imports in train.py to remove ART references
-- [ ] Update imports in config.py to remove ART references
+### Ticket 1.1: Remove ART Dependency & Setup Base Architecture ✅
+- [x] Remove `openpipe-art` from dependencies in pyproject.toml
+- [x] Add PyTorch Lightning to dependencies
+- [x] Add Transformers library to dependencies
+- [x] Add PEFT library to dependencies
+- [x] Add vLLM to dependencies
+- [x] Create `src/train_agent/training/` module directory
+- [x] Create `src/train_agent/inference/` module directory
+- [x] Create `src/train_agent/rewards/` module directory
+- [x] Update imports in train.py to remove ART references
+- [x] Update imports in config.py to remove ART references
 
 ### Ticket 1.2: Implement vLLM Inference Engine
 - [ ] Create `src/train_agent/inference/__init__.py`
