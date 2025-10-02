@@ -27,3 +27,24 @@ MAX_SEQ_LENGTH = 65536  # Maximum sequence length
 GPU_MEMORY_UTILIZATION = 0.85  # GPU memory usage (0.0-1.0)
 
 DATASET_FILENAME = "data/dataset.json"
+
+# LoRA Configuration
+LORA_CONFIG = {
+    "rank": 16,  # LoRA rank (r in the paper)
+    "alpha": 32,  # LoRA alpha (scaling factor)
+    "dropout": 0.05,  # Dropout probability
+    "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"],  # Which modules to apply LoRA to
+    "adapter_path": None,  # Path to saved LoRA adapter (set after training)
+    "merge_on_load": True,  # Whether to merge LoRA into base model before inference
+}
+
+# Inference Configuration (vLLM)
+INFERENCE_CONFIG = {
+    "tensor_parallel_size": 1,  # Number of GPUs for tensor parallelism
+    "pipeline_parallel_size": 1,  # Number of GPUs for pipeline parallelism
+    "dtype": "auto",  # Model dtype: "auto", "float16", "bfloat16"
+}
+
+# Paths for model checkpoints
+CHECKPOINT_DIR = "./checkpoints"  # Directory for saving LoRA checkpoints
+MERGED_MODEL_DIR = "./merged_models"  # Directory for merged models
