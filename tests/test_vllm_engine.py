@@ -7,7 +7,7 @@ from train_agent.inference import VLLMEngine, VLLMConfig, SamplingConfig
 from train_agent.config import MAX_TURNS
 
 
-TEST_MODEL = "Qwen/Qwen3-0.6B"
+TEST_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
 
 pytestmark = pytest.mark.gpu
 
