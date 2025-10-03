@@ -3,13 +3,13 @@ PyTorch Lightning module for GRPO training.
 """
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import pytorch_lightning as pl
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from typing import Dict, Any, Optional
+from typing import Dict
+
+from train_agent.model_schemas import GRPOConfig
 
 
 class GRPOLightningModule(pl.LightningModule):
@@ -20,46 +20,47 @@ class GRPOLightningModule(pl.LightningModule):
     in the same group, making it suitable for RL from AI feedback scenarios.
     """
 
-    def __init__(
-        self,
-        model_name: str,
-        learning_rate: float = 1e-5,
-        weight_decay: float = 0.01,
-        warmup_steps: int = 100,
-        max_steps: int = 1000,
-        gradient_clip_val: float = 1.0,
-        advantage_type: str = "mean_normalized",
-    ):
+    def __init__(self, grpo_config: GRPOConfig):
         """
         Initialize GRPO Lightning module.
 
         Args:
-            model_name: HuggingFace model name or path
-            learning_rate: Learning rate for optimizer
-            weight_decay: Weight decay for AdamW
-            warmup_steps: Number of warmup steps for lr scheduler
-            max_steps: Maximum training steps for lr scheduler
-            gradient_clip_val: Maximum gradient norm for clipping
-            advantage_type: Type of advantage calculation (from grpo.py)
+            grpo_config: GRPOConfig object containing all training parameters
         """
         super().__init__()
-        self.save_hyperparameters()
+        self.grpo_config = grpo_config
+        self.save_hyperparameters(grpo_config.model_dump())
+
+        # Store training config attributes as instance attributes
+        self.learning_rate = grpo_config.training_config.learning_rate
+        self.weight_decay = grpo_config.training_config.weight_decay
+        self.warmup_steps = grpo_config.training_config.warmup_steps
+        self.max_steps = grpo_config.training_config.max_training_steps
+        self.gradient_clip_val = grpo_config.training_config.gradient_clip_val
+
+        # Store GRPO-specific attributes
+        self.advantage_type = grpo_config.advantage_type
+        self.rollouts_per_group = grpo_config.rollouts_per_group
+        self.groups_per_step = grpo_config.groups_per_step
+
+        # Convert dtype string to torch dtype
+        dtype_map = {
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+            "float32": torch.float32,
+        }
+        torch_dtype = dtype_map.get(grpo_config.torch_dtype, torch.bfloat16)
 
         # Load model and tokenizer
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            trust_remote_code=True,
+            grpo_config.model_name,
+            torch_dtype=torch_dtype,
+            trust_remote_code=grpo_config.trust_remote_code,
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-
-        # Training hyperparameters
-        self.learning_rate = learning_rate
-        self.weight_decay = weight_decay
-        self.warmup_steps = warmup_steps
-        self.max_steps = max_steps
-        self.gradient_clip_val = gradient_clip_val
-        self.advantage_type = advantage_type
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            grpo_config.model_name,
+            trust_remote_code=grpo_config.trust_remote_code
+        )
 
     def forward(self, input_ids, attention_mask=None):
         """Forward pass through the model."""

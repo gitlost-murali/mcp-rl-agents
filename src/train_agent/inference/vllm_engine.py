@@ -1,39 +1,14 @@
 """vLLM inference engine with LoRA adapter loading and merging support."""
 
 import os
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 import torch
-from pydantic import BaseModel, Field
 from vllm import LLM, SamplingParams
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 
-from train_agent.config import (
-    BASE_MODEL,
-    MAX_SEQ_LENGTH,
-    GPU_MEMORY_UTILIZATION,
-    INFERENCE_CONFIG,
-)
-
-
-class VLLMConfig(BaseModel):
-    model_name: str = Field(default=BASE_MODEL)
-    max_seq_length: int = Field(default=MAX_SEQ_LENGTH)
-    gpu_memory_utilization: float = Field(default=GPU_MEMORY_UTILIZATION)
-    tensor_parallel_size: int = Field(default=INFERENCE_CONFIG["tensor_parallel_size"])
-    pipeline_parallel_size: int = Field(default=INFERENCE_CONFIG["pipeline_parallel_size"])
-    dtype: str = Field(default=INFERENCE_CONFIG["dtype"])
-    trust_remote_code: bool = Field(default=True)
-    seed: int = Field(default=42)
-
-
-class SamplingConfig(BaseModel):
-    temperature: float = Field(default=0.7)
-    top_p: float = Field(default=0.9)
-    top_k: int = Field(default=-1)
-    max_tokens: int = Field(default=8000)
-    stop: Optional[List[str]] = Field(default=None)
+from train_agent.model_schemas import VLLMConfig, SamplingConfig
 
 
 class VLLMEngine:
