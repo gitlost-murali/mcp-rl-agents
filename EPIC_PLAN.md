@@ -2,7 +2,7 @@
 
 ## Branch Strategy
 Branch: `epic-planner-grpo-rewrite`
-
+let
 ## Overview
 Transform the ART-dependent prototype into a clean GRPO-based training system using PyTorch Lightning + Transformers.
 
@@ -34,19 +34,7 @@ Transform the ART-dependent prototype into a clean GRPO-based training system us
 - [x] Test basic inference functionality
 - [x] Test batched inference functionality
 
-### Ticket 1.3: Implement GRPO Algorithm Core ✅
-- [x] Create `src/train_agent/training/__init__.py`
-- [x] Create `src/train_agent/training/grpo.py`
-- [x] Implement group-based rollout data structure (GroupRollout Pydantic model)
-- [x] Implement advantage calculation within groups (4 methods: mean_normalized, mean_centered, max_relative, percentile)
-- [ ] Implement relative reward normalization
-- [ ] Implement policy gradient loss computation
-- [ ] Add KL divergence penalty computation
-- [ ] Add entropy bonus computation
-- [ ] Test advantage calculation logic
-- [ ] Test loss computation with mock data
-
-### Ticket 1.4: Create PyTorch Lightning Training Module
+### Ticket 1.3: Create PyTorch Lightning Training Module
 - [ ] Create `src/train_agent/training/lightning_module.py`
 - [ ] Implement GRPOLightningModule class
 - [ ] Implement `__init__` with model and config
@@ -59,7 +47,7 @@ Transform the ART-dependent prototype into a clean GRPO-based training system us
 - [ ] Add checkpointing hooks
 - [ ] Add logging hooks for metrics
 
-### Ticket 1.5: Integrate PEFT for LoRA Training
+### Ticket 1.4: Integrate PEFT for LoRA Training
 - [ ] Create `src/train_agent/training/lora_config.py`
 - [ ] Define LoRAConfig dataclass with parameters
 - [ ] Add rank configuration (default: 16)
@@ -71,6 +59,18 @@ Transform the ART-dependent prototype into a clean GRPO-based training system us
 - [ ] Add adapter saving functionality
 - [ ] Add adapter merging functionality
 - [ ] Test LoRA integration with base model
+
+### Ticket 1.5: Implement GRPO Algorithm Core ✅
+- [x] Create `src/train_agent/training/__init__.py`
+- [x] Create `src/train_agent/training/grpo.py`
+- [x] Implement group-based rollout data structure (GroupRollout Pydantic model)
+- [x] Implement advantage calculation within groups (4 methods: mean_normalized, mean_centered, max_relative, percentile)
+- [ ] Implement relative reward normalization
+- [ ] Implement policy gradient loss computation
+- [ ] Add entropy bonus computation
+- [ ] Test advantage calculation logic
+- [ ] Test loss computation with mock data
+
 
 ### Ticket 1.6: Update Rollout Function
 - [ ] Create `src/train_agent/training/trajectory.py`
@@ -171,7 +171,6 @@ Transform the ART-dependent prototype into a clean GRPO-based training system us
 - [ ] Add GRPO hyperparameters section
 - [ ] Add rollouts_per_group configuration
 - [ ] Add advantage normalization settings
-- [ ] Add KL penalty coefficient
 - [ ] Add Lightning Trainer configurations
 - [ ] Add num_gpus, precision, strategy settings
 - [ ] Add vLLM engine configurations
