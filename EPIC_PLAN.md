@@ -34,11 +34,11 @@ Transform the ART-dependent prototype into a clean GRPO-based training system us
 - [x] Test basic inference functionality
 - [x] Test batched inference functionality
 
-### Ticket 1.3: Implement GRPO Algorithm Core
-- [ ] Create `src/train_agent/training/__init__.py`
-- [ ] Create `src/train_agent/training/grpo.py`
-- [ ] Implement group-based rollout data structure
-- [ ] Implement advantage calculation within groups
+### Ticket 1.3: Implement GRPO Algorithm Core ✅
+- [x] Create `src/train_agent/training/__init__.py`
+- [x] Create `src/train_agent/training/grpo.py`
+- [x] Implement group-based rollout data structure (GroupRollout Pydantic model)
+- [x] Implement advantage calculation within groups (4 methods: mean_normalized, mean_centered, max_relative, percentile)
 - [ ] Implement relative reward normalization
 - [ ] Implement policy gradient loss computation
 - [ ] Add KL divergence penalty computation
