@@ -8,6 +8,7 @@ This approach is particularly useful for RL from AI feedback scenarios.
 
 from typing import Any, List, Optional
 import numpy as np
+import torch
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -171,3 +172,45 @@ def compute_weighted_advantages(
         advantages = advantages * weights
 
     return advantages
+
+
+def compute_drgrpo_loss(
+    new_logprobs: torch.Tensor,
+    old_logprobs: torch.Tensor,
+    advantages: torch.Tensor,
+    clip_epsilon: float = 0.2,
+) -> torch.Tensor:
+    """
+    Compute Dr. GRPO loss using clipped PPO-style objective.
+
+    Dr. GRPO removes length normalization, std normalization, and KL regularization
+    from standard GRPO, using only the clipped PPO objective.
+
+    Args:
+        new_logprobs: Log probabilities from current policy [batch_size]
+        old_logprobs: Log probabilities from reference/old policy [batch_size]
+        advantages: Pre-computed advantages [batch_size]
+        clip_epsilon: Clipping threshold (default 0.2, giving range [0.8, 1.2])
+
+    Returns:
+        Scalar loss value (negative of clipped objective)
+    """
+    # Compute probability ratio
+    prob_ratio = torch.exp(new_logprobs - old_logprobs)
+
+    # Apply clipping
+    clip_low = 1.0 - clip_epsilon
+    clip_high = 1.0 + clip_epsilon
+    clipped_ratio = torch.clamp(prob_ratio, clip_low, clip_high)
+
+    # Compute both objectives
+    unclipped_objective = prob_ratio * advantages
+    clipped_objective = clipped_ratio * advantages
+
+    # Take minimum (most conservative)
+    ppo_objective = torch.min(unclipped_objective, clipped_objective)
+
+    # PPO loss is negative of objective
+    loss = -ppo_objective.sum()
+
+    return loss

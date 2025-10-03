@@ -2,12 +2,14 @@
 
 import pytest
 import numpy as np
+import torch
 
 from train_agent.training.grpo import (
     GroupRollout,
     calculate_group_advantages,
     calculate_batch_advantages,
     get_group_statistics,
+    compute_drgrpo_loss,
 )
 
 
@@ -175,3 +177,125 @@ def test_get_group_statistics():
     assert stats["reward_range"] == 3.0
     assert stats["scenario_id"] == "test_scenario"
     assert stats["group_id"] == "group_1"
+
+
+def test_compute_drgrpo_loss_no_clipping():
+    """Test Dr. GRPO loss when ratio is within clipping bounds."""
+    # Small difference in logprobs -> ratio close to 1
+    new_logprobs = torch.tensor([-1.0, -2.0, -3.0])
+    old_logprobs = torch.tensor([-1.1, -2.1, -3.1])
+    advantages = torch.tensor([1.0, -0.5, 2.0])
+
+    loss = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, clip_epsilon=0.2)
+
+    # When no clipping occurs, loss = -sum(exp(new - old) * advantages)
+    prob_ratio = torch.exp(new_logprobs - old_logprobs)
+    expected_loss = -(prob_ratio * advantages).sum()
+
+    assert loss.item() == pytest.approx(expected_loss.item(), abs=1e-5)
+
+
+def test_compute_drgrpo_loss_with_clipping():
+    """Test Dr. GRPO loss when ratio exceeds clipping bounds."""
+    # Large difference in logprobs to trigger clipping
+    new_logprobs = torch.tensor([0.0, 0.0])
+    old_logprobs = torch.tensor([-2.0, 2.0])  # ratio: ~7.39, ~0.135
+    advantages = torch.tensor([1.0, 1.0])
+
+    loss = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, clip_epsilon=0.2)
+
+    # First ratio ~7.39 should be clipped to 1.2
+    # Second ratio ~0.135 should be clipped to 0.8
+    expected_objective = min(1.2 * 1.0, torch.exp(torch.tensor(2.0)).item() * 1.0) + \
+                         min(0.8 * 1.0, torch.exp(torch.tensor(-2.0)).item() * 1.0)
+    expected_loss = -expected_objective
+
+    assert loss.item() == pytest.approx(expected_loss, abs=1e-5)
+
+
+def test_compute_drgrpo_loss_negative_advantages():
+    """Test Dr. GRPO loss with negative advantages (bad rollouts)."""
+    new_logprobs = torch.tensor([0.0, 0.0])
+    old_logprobs = torch.tensor([-1.0, 1.0])
+    advantages = torch.tensor([-1.0, -1.0])  # Both are bad rollouts
+
+    loss = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, clip_epsilon=0.2)
+
+    # With negative advantages, we want the loss to discourage these actions
+    # The objective should be negative, making the loss positive
+    assert loss.item() > 0
+
+
+def test_compute_drgrpo_loss_zero_advantages():
+    """Test Dr. GRPO loss with zero advantages."""
+    new_logprobs = torch.tensor([0.0, -1.0, -2.0])
+    old_logprobs = torch.tensor([-1.0, -2.0, -3.0])
+    advantages = torch.tensor([0.0, 0.0, 0.0])
+
+    loss = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, clip_epsilon=0.2)
+
+    # With zero advantages, loss should be zero
+    assert loss.item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_compute_drgrpo_loss_clipping_bounds():
+    """Test that clipping bounds are correctly applied."""
+    # Test upper bound clipping
+    new_logprobs = torch.tensor([0.0])
+    old_logprobs = torch.tensor([-3.0])  # ratio: e^3 ≈ 20.09
+    advantages = torch.tensor([1.0])
+
+    loss = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, clip_epsilon=0.2)
+
+    # Ratio should be clipped to 1.2
+    expected_loss = -1.2 * 1.0
+    assert loss.item() == pytest.approx(expected_loss, abs=1e-5)
+
+    # Test lower bound clipping
+    new_logprobs = torch.tensor([0.0])
+    old_logprobs = torch.tensor([3.0])  # ratio: e^-3 ≈ 0.0498
+    advantages = torch.tensor([1.0])
+
+    loss = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, clip_epsilon=0.2)
+
+    # Ratio e^-3 ≈ 0.0498 should be clipped to 0.8
+    # The clipped objective is 0.8 * 1.0 = 0.8
+    # The unclipped objective is ~0.0498 * 1.0 = ~0.0498
+    # min(0.8, 0.0498) = 0.0498, so loss = -0.0498
+    expected_loss = -torch.exp(torch.tensor(-3.0)).item() * 1.0
+    assert loss.item() == pytest.approx(expected_loss, abs=1e-5)
+
+
+def test_compute_drgrpo_loss_custom_epsilon():
+    """Test Dr. GRPO loss with custom clipping epsilon."""
+    new_logprobs = torch.tensor([0.0])
+    old_logprobs = torch.tensor([-2.0])
+    advantages = torch.tensor([1.0])
+
+    # With epsilon=0.1, clipping range is [0.9, 1.1]
+    loss = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, clip_epsilon=0.1)
+
+    # Ratio e^2 ≈ 7.39 should be clipped to 1.1
+    expected_loss = -1.1 * 1.0
+    assert loss.item() == pytest.approx(expected_loss, abs=1e-5)
+
+
+def test_compute_drgrpo_loss_batch():
+    """Test Dr. GRPO loss with a realistic batch."""
+    batch_size = 8
+    torch.manual_seed(42)
+
+    new_logprobs = torch.randn(batch_size, requires_grad=True) * 0.5
+    old_logprobs = torch.randn(batch_size) * 0.5
+    advantages = torch.randn(batch_size)
+
+    loss = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, clip_epsilon=0.2)
+
+    # Loss should be a scalar
+    assert loss.dim() == 0
+
+    # Loss should be finite
+    assert torch.isfinite(loss)
+
+    # Verify gradient can flow through
+    assert loss.requires_grad
