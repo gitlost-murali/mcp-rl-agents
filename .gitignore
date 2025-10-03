@@ -13,3 +13,6 @@ wheels/
 .venv
 .env
 .python-version
+claude_setup/
+CLAUDE.md
+node-v*
