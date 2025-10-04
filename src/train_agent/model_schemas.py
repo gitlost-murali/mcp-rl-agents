@@ -35,6 +35,7 @@ class GRPOConfig(BaseModel):
 
     # GRPO-specific: advantage calculation
     advantage_type: str = Field(default="mean_normalized", description="Type of advantage calculation (mean_normalized, etc.)")
+    clip_epsilon: float = Field(default=0.2, description="PPO clipping epsilon for policy ratio")
 
     # Model loading
     torch_dtype: str = Field(default="bfloat16", description="Model dtype: float16, bfloat16, float32")

@@ -7,9 +7,10 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import pytorch_lightning as pl
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from typing import Dict
+from typing import Dict, Optional
 
 from train_agent.model_schemas import GRPOConfig
+from train_agent.training.grpo import compute_drgrpo_loss
 
 
 class GRPOLightningModule(pl.LightningModule):
@@ -42,6 +43,7 @@ class GRPOLightningModule(pl.LightningModule):
         self.advantage_type = grpo_config.advantage_type
         self.rollouts_per_group = grpo_config.rollouts_per_group
         self.groups_per_step = grpo_config.groups_per_step
+        self.clip_epsilon = grpo_config.clip_epsilon
 
         # Convert dtype string to torch dtype
         dtype_map = {
@@ -71,6 +73,35 @@ class GRPOLightningModule(pl.LightningModule):
         )
         return outputs.logits
 
+    def compute_sequence_logprobs(
+        self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """
+        Compute total log probability for each sequence in the batch.
+
+        Args:
+            input_ids: Token IDs [batch_size, seq_len]
+            attention_mask: Attention mask [batch_size, seq_len] (optional)
+
+        Returns:
+            Total log probability per sequence [batch_size]
+        """
+        # Forward pass to get logits
+        logits = self(input_ids, attention_mask)
+
+        # Compute log probabilities
+        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+
+        # Extract log probs for actual tokens (shift to align predictions with targets)
+        # Predictions at positions 0:N-1 predict tokens at positions 1:N
+        new_logprobs = torch.gather(
+            log_probs[:, :-1, :],  # predictions: exclude last position
+            dim=-1,
+            index=input_ids[:, 1:].unsqueeze(-1)  # targets: exclude first position
+        ).squeeze(-1).sum(dim=-1)  # sum over sequence to get total log prob
+
+        return new_logprobs
+
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """
         Training step for GRPO.
@@ -80,17 +111,24 @@ class GRPOLightningModule(pl.LightningModule):
             'input_ids': [batch_size, seq_len],
             'attention_mask': [batch_size, seq_len],
             'advantages': [batch_size],
+            'old_logprobs': [batch_size],
         }
         """
         input_ids = batch['input_ids']
         attention_mask = batch.get('attention_mask', None)
         advantages = batch['advantages']
+        old_logprobs = batch['old_logprobs']
 
-        # Forward pass
-        logits = self(input_ids, attention_mask)
+        #  Compute log probabilities for current policy
+        new_logprobs = self.compute_sequence_logprobs(input_ids, attention_mask)
 
-        # Placeholder loss - to be implemented
-        loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+        # Compute GRPO loss
+        loss = compute_drgrpo_loss(
+            new_logprobs=new_logprobs,
+            old_logprobs=old_logprobs,
+            advantages=advantages,
+            clip_epsilon=self.clip_epsilon,
+        )
 
         # Logging
         self.log('train/loss', loss, prog_bar=True)
@@ -104,12 +142,18 @@ class GRPOLightningModule(pl.LightningModule):
         input_ids = batch['input_ids']
         attention_mask = batch.get('attention_mask', None)
         advantages = batch['advantages']
+        old_logprobs = batch['old_logprobs']
 
-        # Forward pass
-        logits = self(input_ids, attention_mask)
+        # Compute log probabilities for current policy
+        new_logprobs = self.compute_sequence_logprobs(input_ids, attention_mask)
 
-        # Placeholder loss
-        loss = torch.tensor(0.0, device=self.device)
+        # Compute GRPO loss
+        loss = compute_drgrpo_loss(
+            new_logprobs=new_logprobs,
+            old_logprobs=old_logprobs,
+            advantages=advantages,
+            clip_epsilon=self.clip_epsilon,
+        )
 
         # Logging
         self.log('val/loss', loss)
