@@ -44,6 +44,7 @@ from train_agent.utils.settings import settings
 from train_agent.utils.debug_utils import log, log_json
 
 from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
+from train_agent.training.grpo import calculate_group_advantages, create_group_rollout_from_trajectories
 
 # Optional
 if settings.wandb_api_key:
@@ -171,7 +172,6 @@ class ModelTrainer:
 
                 # Calculate advantages for each group
                 print("Calculating advantages...")
-                from train_agent.training.grpo import calculate_group_advantages, create_group_rollout_from_trajectories
 
                 training_batches = []
                 for group in trajectory_groups:
