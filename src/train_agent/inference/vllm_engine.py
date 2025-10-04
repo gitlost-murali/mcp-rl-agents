@@ -86,7 +86,8 @@ class VLLMEngine:
         if self.config.trust_remote_code:
             cmd.append("--trust-remote-code")
 
-        self.server_process = subprocess.Popen(cmd)
+        print(f"Starting vLLM server with command: {cmd}")
+        self.server_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         # Wait for server to be ready
         print("Waiting for server to start...")

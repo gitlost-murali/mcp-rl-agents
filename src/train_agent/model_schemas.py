@@ -59,7 +59,7 @@ class VLLMConfig(BaseModel):
     """vLLM inference engine configuration."""
     model_name: str = Field(default=BASE_MODEL, description="Model name or path")
     max_seq_length: int = Field(default=65536, description="Maximum sequence length")
-    gpu_memory_utilization: float = Field(default=0.85, description="GPU memory usage (0.0-1.0)")
+    gpu_memory_utilization: float = Field(default=0.60, description="GPU memory usage (0.0-1.0)")
     tensor_parallel_size: int = Field(default=1, description="Number of GPUs for tensor parallelism")
     pipeline_parallel_size: int = Field(default=1, description="Number of GPUs for pipeline parallelism")
     dtype: str = Field(default="auto", description="Model dtype: 'auto', 'float16', 'bfloat16'")

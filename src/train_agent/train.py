@@ -6,12 +6,16 @@ import os
 import random
 from dataclasses import dataclass
 import traceback
+from typing import Optional
 
 import torch
-import weave
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+from train_agent.data.dataset_generator import load_train_and_val_scenarios
 from openai import AsyncOpenAI
 
 from train_agent.config import (
+    DATASET_FILENAME,
     MODEL_NAME,
     PROJECT_NAME,
     MAX_SEQ_LENGTH,
@@ -20,6 +24,16 @@ from train_agent.config import (
     TRAINING_CONFIG,
     RULER_MODEL,
     BASE_MODEL,
+)
+from train_agent.inference.vllm_engine import VLLMEngine
+from train_agent.model_schemas import GRPOConfig, SamplingConfig, VLLMConfig
+from train_agent.training.lightning_module import GRPOLightningModule
+from train_agent.training.trajectory import (
+    Trajectory,
+    TrajectoryGroup,
+    McpScenario,
+    rollout,
+    gather_trajectory_groups,
 )
 from train_agent.utils.mcp_utils import (
     call_mcp_tool,
@@ -34,7 +48,6 @@ from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
 # Optional
 if settings.wandb_api_key:
     os.environ["WANDB_API_KEY"] = settings.wandb_api_key
-    weave.init(PROJECT_NAME)
 else:
     print("WANDB_API_KEY is not set. We'll skip logging metrics to Weights & Biases.")
 
@@ -46,122 +59,155 @@ else:
 random.seed(42)
 
 
-@dataclass
-class McpScenario:
-    """A scenario for MCP agent evaluation against a remote MCP server."""
-
-    task_description: str
-    max_turns: int = MAX_TURNS
-
-
 class ModelTrainer:
-    def __init__(self):
-        self.model = art.TrainableModel(
-            name=MODEL_NAME,
-            project=PROJECT_NAME,
-            base_model=BASE_MODEL,
-            _internal_config=art.dev.InternalModelConfig(
-                engine_args=art.dev.EngineArgs(
-                    pipeline_parallel_size=torch.cuda.device_count(),  
-                    gpu_memory_utilization=0.8  
-                ),
-                torchtune_args=art.dev.TorchtuneArgs(
-                    model="qwen3_4b_instruct",           
-                    model_type="QWEN3",         
-                    async_weight_syncing=True,
-                    enable_activation_offloading=False
-                ),
-            ),
+    def __init__(self, grpo_config: Optional[GRPOConfig]):
+        """Initialize ModelTrainer with Lightning module and inference client.
+
+        Args:
+            grpo_config: GRPO configuration. If None, creates default from TRAINING_CONFIG.
+        """
+        # Create GRPO config from legacy TRAINING_CONFIG if not provided
+        if grpo_config is None:
+            grpo_config = GRPOConfig(
+                model_name=BASE_MODEL,
+                rollouts_per_group=TRAINING_CONFIG.get("rollouts_per_group", 4),
+                groups_per_step=TRAINING_CONFIG.get("groups_per_step", 2),
+                max_turns=MAX_TURNS,
+            )
+            grpo_config.training_config.learning_rate = TRAINING_CONFIG.get("learning_rate", 1e-5)
+            grpo_config.training_config.num_epochs = TRAINING_CONFIG.get("num_epochs", 1)
+
+        self.grpo_config = grpo_config
+
+        # Initialize Lightning module
+        self.lightning_module = GRPOLightningModule(grpo_config)
+
+        # Initialize inference client for rollouts (vLLM server via OpenAI client)
+        # This expects a vLLM server running on localhost:8000 by default
+        self.inference_client = AsyncOpenAI(
+            base_url="http://localhost:8000/v1",
+            api_key="EMPTY"  # vLLM doesn't need a real API key
         )
 
-        # # To run on a T4, we need to override some config defaults.
-        # self.model._internal_config = _internal_config
+        # Sampling config for rollouts
+        self.sampling_config = SamplingConfig(temperature=0.7, top_p=0.9, max_tokens=8000)
 
-        # Initialize the server
-        self.backend = LocalBackend(
-            in_process=True,
-            path="./.art",
-        )
-
-        asyncio.run(self.register_model())
-        print("Model created!")
-        print("Base model:", BASE_MODEL)
-        print("Model name:", MODEL_NAME)
-        print("Project name:", PROJECT_NAME)
-
-    async def register_model(self):
-        # Register the model with the local Backend
-        await self.model.register(self.backend)
+        print("ModelTrainer initialized!")
+        print(f"Base model: {BASE_MODEL}")
+        print(f"Model name: {MODEL_NAME}")
+        print(f"Project: {PROJECT_NAME}")
+        print(f"Rollouts per group: {grpo_config.rollouts_per_group}")
+        print(f"Groups per step: {grpo_config.groups_per_step}")
 
     def create_scenarios(self, raw_train_scenarios: list[dict]):
+        """Convert raw scenario dicts to McpScenario objects."""
         return [
             McpScenario(
                 task_description=scenario["task"],
                 max_turns=MAX_TURNS,
+                scenario_id=scenario.get("id", scenario["task"][:50])
             )
             for scenario in raw_train_scenarios
         ]
 
-    async def create_iterator(self, train_scenarios: list[McpScenario]):
-        return iterate_dataset(
-            train_scenarios,
-            groups_per_step=TRAINING_CONFIG["groups_per_step"],
-            num_epochs=TRAINING_CONFIG["num_epochs"],
-            initial_step=await self.model.get_step(),  # Resume from checkpoint
-        )
-
     async def train(self, raw_train_scenarios: list[dict]):
+        """Train the model using GRPO with Lightning."""
         print(
-            f"Using config: max_turns={MAX_TURNS}, rollouts_per_group={TRAINING_CONFIG['rollouts_per_group']}, "
-            f"groups_per_step={TRAINING_CONFIG['groups_per_step']}, num_epochs={TRAINING_CONFIG['num_epochs']}, "
-            f"learning_rate={TRAINING_CONFIG['learning_rate']}"
+            f"Using config: max_turns={MAX_TURNS}, "
+            f"rollouts_per_group={self.grpo_config.rollouts_per_group}, "
+            f"groups_per_step={self.grpo_config.groups_per_step}, "
+            f"num_epochs={self.grpo_config.training_config.num_epochs}, "
+            f"learning_rate={self.grpo_config.training_config.learning_rate}"
         )
-
-        await self.model.register(self.backend)
 
         train_scenarios = self.create_scenarios(raw_train_scenarios)
-        train_iterator = await self.create_iterator(train_scenarios)
 
-        # Main training loop using iterate_dataset
-        for batch in train_iterator:
-            print("Gathering trajectory groups with RULER scoring...")
-
-            # Use gather_trajectory_groups with ruler_score_group
-            groups = await art.gather_trajectory_groups(
-                (
-                    art.TrajectoryGroup(
-                        rollout(self.model, scenario, False)
-                        for _ in range(TRAINING_CONFIG["rollouts_per_group"])
-                    )
-                    for scenario in batch.items
+        # Set up Lightning Trainer
+        trainer = pl.Trainer(
+            max_steps=self.grpo_config.training_config.max_training_steps,
+            callbacks=[
+                ModelCheckpoint(
+                    dirpath="./checkpoints",
+                    filename="grpo-{step:06d}",
+                    save_top_k=3,
+                    monitor="train/loss"
                 ),
-                pbar_desc=f"train gather step {batch.step}",
-            )
+                LearningRateMonitor(logging_interval="step"),
+            ],
+            gradient_clip_val=self.grpo_config.training_config.gradient_clip_val,
+            precision="bf16-mixed" if self.grpo_config.torch_dtype == "bfloat16" else "16-mixed",
+            accelerator="auto",
+            devices="auto",
+        )
 
-            scored_groups = []
-            for group in groups:
-                # Use RULER to assign relative scores to each trajectory
-                judged_group = await ruler_score_group(
-                    group, judge_model=RULER_MODEL, debug=True, swallow_exceptions=True
+        # Main training loop
+        for epoch in range(self.grpo_config.training_config.num_epochs):
+            print(f"\n=== Epoch {epoch + 1}/{self.grpo_config.training_config.num_epochs} ===")
+
+            # Process scenarios in batches (groups_per_step scenarios at a time)
+            for batch_idx in range(0, len(train_scenarios), self.grpo_config.groups_per_step):
+                batch_scenarios = train_scenarios[batch_idx:batch_idx + self.grpo_config.groups_per_step]
+
+                print(f"\nGathering trajectory groups for batch {batch_idx // self.grpo_config.groups_per_step + 1}...")
+
+                # Gather trajectories for this batch
+                trajectory_groups = await gather_trajectory_groups(
+                    inference_client=self.inference_client,
+                    model_name=BASE_MODEL,  # TODO: Use current checkpoint model name
+                    scenarios=batch_scenarios,
+                    rollouts_per_group=self.grpo_config.rollouts_per_group,
+                    sampling_config=self.sampling_config,
+                    debug=True,
+                    mcp_url=settings.mcp_url,
                 )
-                scored_groups.append(judged_group)
 
-            print("starting train")
-            await self.model.train(
-                scored_groups,
-                config=art.TrainConfig(learning_rate=TRAINING_CONFIG["learning_rate"]),
-            )
-            print("train completed")
-            print(f"Model step: {await self.model.get_step()}")
+                # TODO: Implement trajectory scoring/judging using RULER or other judge model
+                # For now, using a placeholder that assigns rewards based on task completion
+                print("Scoring trajectories...")
+                for group in trajectory_groups:
+                    for traj in group.trajectories:
+                        # Simple placeholder: reward 1.0 if completed, 0.0 otherwise
+                        traj.reward = 1.0 if traj.metrics.get("task_completed", False) else 0.0
+
+                # Calculate advantages for each group
+                print("Calculating advantages...")
+                from train_agent.training.grpo import calculate_group_advantages, create_group_rollout_from_trajectories
+
+                training_batches = []
+                for group in trajectory_groups:
+                    # Create GroupRollout for advantage calculation
+                    group_rollout = create_group_rollout_from_trajectories(
+                        scenario_id=group.scenario_id,
+                        trajectories=group.trajectories,
+                        rewards=group.rewards,
+                    )
+
+                    # Calculate advantages
+                    advantages = calculate_group_advantages(
+                        group_rollout,
+                        advantage_type=self.grpo_config.advantage_type
+                    )
+
+                    # TODO: Prepare batches for Lightning training
+                    # Need to tokenize trajectories and compute old_logprobs
+                    # This requires running inference to get logprobs for each trajectory
+                    print(f"  Group {group.scenario_id}: rewards={group.rewards}, advantages={advantages}")
+
+                # TODO: Create DataLoader and run trainer.fit()
+                # This requires implementing a custom Dataset/DataLoader that yields batches
+                # with the format expected by GRPOLightningModule.training_step()
+                print("Training step not yet fully implemented - need to tokenize and compute old_logprobs")
+
+        print("\n=== Training completed ===")
 
     async def test(self, raw_val_scenarios: list[dict]):
-
-        # Generate test inputs
+        """Test the trained model on validation scenarios."""
         print("Generating test inputs...")
         val_scenarios = [
             McpScenario(
                 task_description=scenario["task"],
                 max_turns=MAX_TURNS,
+                scenario_id=scenario.get("id", scenario["task"][:50])
             )
             for scenario in raw_val_scenarios
         ]
@@ -169,229 +215,48 @@ class ModelTrainer:
         print(f"\n🧪 Testing the trained model on {len(val_scenarios)} new inputs:\n")
         print("=" * 80)
 
-        for i, scenario in enumerate(val_scenarios):
+        for i, scenario in enumerate(val_scenarios[:3]):
             print(f"\nTest {i + 1}:")
             print(f"Input: {scenario.task_description}")
 
             # Run the model
-            result_trajectory = await rollout(self.model, scenario)
+            result_trajectory = await rollout(
+                inference_client=self.inference_client,
+                model_name=BASE_MODEL,  # TODO: Use checkpoint model name
+                scenario=scenario,
+                sampling_config=self.sampling_config,
+                debug=True,
+                mcp_url=settings.mcp_url,
+            )
 
             # Extract the model's response
-            messages = result_trajectory.messages()
+            messages = result_trajectory.messages
             model_response = messages[-1]["content"] if messages else "No response"
 
+            with open(f"model_response_{i}.json", "w") as f:
+                json.dump(messages, f, indent=4)
+
             print(f"Model output: {model_response}")
+            print(f"Task completed: {result_trajectory.metrics.get('task_completed', False)}")
+            print(f"Number of turns: {result_trajectory.metrics.get('num_turns', 0)}")
             print("-" * 80)
 
         print("\n🎉 Testing completed!")
-        print(
-            f"\nYour model '{MODEL_NAME}' has been trained to use the MCP server at:"
-        )
+        print(f"\nYour model '{MODEL_NAME}' has been trained to use the MCP server at:")
         print(settings.mcp_url)
         print("\nTo use this model in production:")
-        print("1. The model checkpoint is saved in ./.art/")
-        print("2. You can load it using the vLLM library")
-        print(
-            "3. Or continue training with more examples by adjusting the configuration at the top"
-        )
+        print("1. The model checkpoint is saved in ./checkpoints/")
+        print("2. You can load it using the Lightning or transformers library")
+        print("3. Or continue training with more examples by adjusting the configuration")
+    
 
-@weave.op()
-async def rollout(
-    model: art.Model,
-    scenario: McpScenario,
-    debug: bool = False,
-    mcp_url: str = settings.mcp_url,
-) -> art.Trajectory:
-    """Run an MCP agent rollout against the remote MCP server."""
-    traj = art.Trajectory(
-        messages_and_choices=[],
-        reward=0,
-        metadata={"task": scenario.task_description},
-        metrics={
-            "task_completed": False,
-            "success": False,
-            "ran_out_of_turns": False,
-        },
-        scenario=scenario,
-    )
+if __name__ == "__main__":
+    # engine = VLLMEngine(VLLMConfig())
+    # engine.start_server()
+    # engine._init_client()
+    trainer = ModelTrainer(GRPOConfig())
 
-    tool_schemas: list[
-        ChatCompletionToolParam
-    ] = await get_tool_schemas_from_mcp_with_complete_task_tool(mcp_url)
-    traj.tools = tool_schemas
-
-    # Initialize conversation
-    system_prompt = (
-        f"You are an MCP (Model Context Protocol) agent.\n\n"
-        f"Use MCP tools through the server to complete your task.\n\n"
-        f"When you believe you have completed the task, call the 'complete_task' function with a summary of what you accomplished. "
-        f"You have a total of {scenario.max_turns} turns."
-        # NOTE: removing 'Only use tool calls, do not write any content.' — some models
-        # will freeze if they think plain text is disallowed. Let them output thoughts but
-        # we only process tool calls below.
-    )
-
-    traj.messages_and_choices = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": f"Please complete this task: {scenario.task_description}",
-        },
-    ]
-
-    num_turns = 0
-    task_completed = False
-
-    # Main interaction loop
-    while num_turns < scenario.max_turns and not task_completed:
-        num_turns += 1
-
-        try:
-            # === Log request ===
-            last_user = next(
-                (m for m in reversed(traj.messages()) if m["role"] == "user"), None
-            )
-            log(
-                "LLM request",
-                step=num_turns,
-                model=(model.inference_model_name or model.name),
-                tools=len(tool_schemas),
-                last_user=(last_user["content"][:160] + "..." if last_user else None),
-            )
-
-            # Get LLM response
-            async with traj.track_duration("llm_completion"):
-                openai_client = AsyncOpenAI(
-                    api_key=model.inference_api_key,
-                    base_url=model.inference_base_url,
-                )
-
-                # We also log the request body (without huge params)
-                req_preview = {
-                    "model": model.inference_model_name
-                    if model.inference_model_name
-                    else model.name,
-                    "messages_len": len(traj.messages()),
-                    "tools_len": len(tool_schemas),
-                }
-                log_json("LLM request (preview)", req_preview)
-
-                response = await openai_client.chat.completions.create(
-                    model=model.inference_model_name
-                    if model.inference_model_name
-                    else model.name,
-                    messages=traj.messages(),
-                    tools=tool_schemas,
-                    max_completion_tokens=8000,
-                )
-
-            # === Log response ===
-            choice = response.choices[0]
-
-            finish_reason = getattr(choice, "finish_reason", None)
-            msg = choice.message
-            has_tools = bool(getattr(msg, "tool_calls", None))
-            content_preview = (
-                (msg.content[:200] + "...")
-                if isinstance(msg.content, str) and msg.content
-                else str(msg.content)[:200]
-            )
-            log(
-                "LLM response parsed",
-                finish_reason=finish_reason,
-                has_tool_calls=has_tools,
-                content_preview=content_preview,
-            )
-
-            traj.messages_and_choices.append(choice)
-
-            # Handle tool calls
-            if msg.tool_calls:
-                for tool_call in msg.tool_calls:
-                    try:
-                        log(
-                            "Tool call received",
-                            name=tool_call.function.name,
-                            raw_args=tool_call.function.arguments,
-                        )
-                        tool_args = json.loads(tool_call.function.arguments or "{}")
-
-                        if tool_call.function.name == "complete_task":
-                            traj.metrics["task_completed"] = True
-                            task_completed = True
-                            traj.logs.append(
-                                f"Task completion attempted with summary: {tool_args.get('summary', '')}"
-                            )
-                            # We still append a tool message for completeness
-                            traj.messages_and_choices.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": tool_call.id,
-                                    "content": "Task marked complete.",
-                                }
-                            )
-                        else:
-                            # 🔧 Call MCP tool through remote Smithery session
-                            result = await call_mcp_tool(
-                                tool_call.function.name, tool_args, mcp_url
-                            )
-
-                            content_text = get_content_text(result)
-                            log(
-                                "Tool result",
-                                name=tool_call.function.name,
-                                len=len(content_text),
-                            )
-
-                            if len(content_text) > 20000:
-                                # print(
-                                #     f"Tool call result for {tool_call.function.name} is too long: {len(content_text)}"
-                                # )
-                                # print(f"Args: {tool_args}")
-                                # print(content_text[:1000])
-                                # print(content_text[-1000:])
-                                raise Exception(
-                                    f"Tool call result for {tool_call.function.name} is too long: {len(content_text)}"
-                                )
-
-                            # Add tool response
-                            traj.messages_and_choices.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": tool_call.id,
-                                    "content": content_text,
-                                }
-                            )
-
-                    except Exception as e:
-                        traceback.print_exc()
-                        traj.logs.append(f"Tool call error: {e}")
-
-                        # Add error response
-                        traj.messages_and_choices.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": f"Error: {str(e)}",
-                            }
-                        )
-            else:
-                # No tool calls — log and continue (RULER will likely give 0)
-                log(
-                    "LLM returned no tool_calls; skipping tool execution",
-                    turn=num_turns,
-                )
-                # You can consider breaking here or letting it try another turn
-                # break
-
-        except Exception as e:
-            traceback.print_exc()
-            traj.logs.append(f"Error in turn {num_turns}: {e}")
-            break
-
-    if not task_completed and num_turns == scenario.max_turns:
-        traj.metrics["ran_out_of_turns"] = True
-
-    traj.metrics["num_turns"] = num_turns
-
-    return traj.finish()
+    # asyncio.run(trainer.train(raw_train_scenarios))
+    raw_val_scenarios = load_train_and_val_scenarios(DATASET_FILENAME)[1]
+    # raw_val_scenarios = [{"task": "what is taylor swift's most streamed song on spotify?", "difficulty": 3}]
+    asyncio.run(trainer.test(raw_val_scenarios))
