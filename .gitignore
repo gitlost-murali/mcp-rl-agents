@@ -16,3 +16,4 @@ wheels/
 claude_setup/
 CLAUDE.md
 node-v*
+.vscode/

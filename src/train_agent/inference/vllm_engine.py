@@ -1,174 +1,164 @@
-"""vLLM inference engine with LoRA adapter loading and merging support."""
+"""vLLM OpenAI-compatible client for hitting a vLLM server."""
 
 import os
-from typing import Optional, List, Dict
+import subprocess
+import time
+from typing import Optional, List, Dict, Any
 
-import torch
-from vllm import LLM, SamplingParams
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
+import requests
+from openai import AsyncOpenAI
 
 from train_agent.model_schemas import VLLMConfig, SamplingConfig
 
 
 class VLLMEngine:
-    """vLLM inference engine with LoRA adapter support.
-
-    This class provides:
-    - vLLM-based inference for fast parallel generation
-    - LoRA adapter loading and merging into base model
-    - Batched generation for rollouts
-    - GPU memory management
-    """
+    """vLLM OpenAI-compatible client wrapper."""
 
     def __init__(self, config: VLLMConfig):
         self.config = config
-        self.llm: Optional[LLM] = None
-        self.tokenizer = None
-        self._load_engine()
+        self.client = None
+        self.server_process = None
+        self._init_client()
 
-    def _load_engine(self):
-        print(f"Loading vLLM engine with model: {self.config.model_name}")
+    def _init_client(self):
+        """Initialize OpenAI client to hit vLLM server."""
+        base_url = os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")
+        api_key = os.environ.get("VLLM_API_KEY", "EMPTY")
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.config.model_name,
-            trust_remote_code=self.config.trust_remote_code
+        print(f"Initializing vLLM client with base_url: {base_url}")
+
+        self.client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key,
         )
 
-        self.llm = LLM(
-            model=self.config.model_name,
-            max_model_len=self.config.max_seq_length,
-            gpu_memory_utilization=self.config.gpu_memory_utilization,
-            tensor_parallel_size=self.config.tensor_parallel_size,
-            pipeline_parallel_size=self.config.pipeline_parallel_size,
-            dtype=self.config.dtype,
-            trust_remote_code=self.config.trust_remote_code,
-            seed=self.config.seed,
-        )
+        print("vLLM client initialized")
 
-        print("vLLM engine loaded successfully")
-
-    @staticmethod
-    def merge_lora_into_base(
-        base_model_name: str,
-        lora_adapter_path: str,
-        output_path: str,
-        dtype: str = "auto"
-    ) -> str:
-        """Merge LoRA adapter weights into base model and save.
+    def _wait_for_server_ready(self, host: str, port: int, timeout: int = 180, poll_interval: int = 10):
+        """Wait for server to be ready by polling the models endpoint.
 
         Args:
-            base_model_name: HuggingFace model name or path to base model
-            lora_adapter_path: Path to saved LoRA adapter checkpoint
-            output_path: Path to save merged model
-            dtype: Data type for model loading (auto, float16, bfloat16)
+            host: Server host
+            port: Server port
+            timeout: Maximum time to wait in seconds
+            poll_interval: Time to wait between polling attempts in seconds
 
-        Returns:
-            Path to the merged model
+        Raises:
+            TimeoutError: If server doesn't become ready within timeout
         """
-        print(f"Loading base model: {base_model_name}")
+        start_time = time.time()
+        models_url = f"http://{host}:{port}/v1/models"
 
-        torch_dtype = torch.float16
-        if dtype == "bfloat16":
-            torch_dtype = torch.bfloat16
-        elif dtype == "auto":
-            torch_dtype = "auto"
+        while time.time() - start_time < timeout:
+            try:
+                response = requests.get(models_url, timeout=5)
+                if response.status_code == 200:
+                    return
+            except (requests.RequestException, Exception) as e:
+                print(f"Server not ready yet: {e}")
+                pass
 
-        base_model = AutoModelForCausalLM.from_pretrained(
-            base_model_name,
-            torch_dtype=torch_dtype,
-            device_map="auto",
-            trust_remote_code=True
-        )
+            time.sleep(poll_interval)
 
-        print(f"Loading LoRA adapter from: {lora_adapter_path}")
+        raise TimeoutError(f"Server failed to start within {timeout} seconds")
 
-        model_with_adapter = PeftModel.from_pretrained(
-            base_model,
-            lora_adapter_path,
-            torch_dtype=torch_dtype,
-        )
+    def start_server(self, port: int = 8000, host: str = "0.0.0.0"):
+        """Start vLLM server as a subprocess."""
+        if self.server_process is not None:
+            print("Server already running")
+            return
 
-        print("Merging LoRA weights into base model...")
+        print(f"Starting vLLM server on {host}:{port}")
 
-        merged_model = model_with_adapter.merge_and_unload()
+        cmd = [
+            "vllm", "serve",
+            self.config.model_name,
+            "--host", host,
+            "--port", str(port),
+            "--max-model-len", str(self.config.max_seq_length),
+            "--gpu-memory-utilization", str(self.config.gpu_memory_utilization),
+            "--tensor-parallel-size", str(self.config.tensor_parallel_size),
+            "--dtype", self.config.dtype,
+            "--enable-auto-tool-choice",
+            "--tool-call-parser", "hermes",
+        ]
 
-        print(f"Saving merged model to: {output_path}")
+        if self.config.trust_remote_code:
+            cmd.append("--trust-remote-code")
 
-        os.makedirs(output_path, exist_ok=True)
+        self.server_process = subprocess.Popen(cmd)
 
-        merged_model.save_pretrained(output_path)
+        # Wait for server to be ready
+        print("Waiting for server to start...")
+        self._wait_for_server_ready(host, port)
+        print("Server started and ready")
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            base_model_name,
-            trust_remote_code=True
-        )
-        tokenizer.save_pretrained(output_path)
+    def stop_server(self):
+        """Stop vLLM server subprocess."""
+        if self.server_process is None:
+            print("No server running")
+            return
 
-        print("LoRA merge completed successfully!")
+        print("Stopping vLLM server...")
+        self.server_process.terminate()
+        try:
+            self.server_process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.server_process.kill()
+            self.server_process.wait()
 
-        del base_model
-        del model_with_adapter
-        del merged_model
-        torch.cuda.empty_cache()
+        self.server_process = None
+        print("Server stopped")
 
-        return output_path
-
-    def load_merged_model(self, merged_model_path: str):
-        print(f"Reloading vLLM engine with merged model: {merged_model_path}")
-
-        self.config.model_name = merged_model_path
-
-        self._load_engine()
-
-    def generate(
+    async def generate_with_messages(
         self,
-        prompts: List[str],
-        sampling_config: Optional[SamplingConfig] = None
-    ) -> List[str]:
-        if self.llm is None:
-            raise RuntimeError("vLLM engine not initialized")
+        messages: List[Dict[str, str]],
+        sampling_config: Optional[SamplingConfig] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        stream: bool = False,
+        extra_body: Optional[Dict[str, Any]] = None,
+    ):
+        """Generate completion using OpenAI client with streaming support.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            sampling_config: Sampling parameters (temperature, top_p, etc.)
+            tools: List of tool definitions
+            tool_choice: Tool choice strategy ('auto', 'required', or specific tool)
+            stream: Whether to stream the response
+            extra_body: Additional parameters to pass (e.g., tool parser config)
+        """
+        if self.client is None:
+            raise RuntimeError("vLLM client not initialized")
 
         if sampling_config is None:
             sampling_config = SamplingConfig()
 
-        sampling_params = SamplingParams(
-            temperature=sampling_config.temperature,
-            top_p=sampling_config.top_p,
-            top_k=sampling_config.top_k,
-            max_tokens=sampling_config.max_tokens,
-            stop=sampling_config.stop,
-        )
+        kwargs = {
+            "model": self.config.model_name,
+            "messages": messages,
+            "temperature": sampling_config.temperature,
+            "top_p": sampling_config.top_p,
+            "max_tokens": sampling_config.max_tokens,
+            "stream": stream,
+        }
 
-        outputs = self.llm.generate(prompts, sampling_params)
+        if tools:
+            kwargs["tools"] = tools
+            # Default to "auto" if tool_choice not specified
+            if tool_choice is None:
+                kwargs["tool_choice"] = "auto"
 
-        results = [output.outputs[0].text for output in outputs]
+        if tool_choice:
+            kwargs["tool_choice"] = tool_choice
 
-        return results
+        if sampling_config.stop:
+            kwargs["stop"] = sampling_config.stop
 
-    def generate_with_messages(
-        self,
-        messages_list: List[List[Dict[str, str]]],
-        sampling_config: Optional[SamplingConfig] = None
-    ) -> List[str]:
-        if self.tokenizer is None:
-            raise RuntimeError("Tokenizer not initialized")
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
-        prompts = []
-        for messages in messages_list:
-            prompt = self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
-            prompts.append(prompt)
+        response = await self.client.chat.completions.create(**kwargs)
 
-        return self.generate(prompts, sampling_config)
-
-    def get_tokenizer(self):
-        return self.tokenizer
-
-    def __del__(self):
-        if self.llm is not None:
-            del self.llm
-            torch.cuda.empty_cache()
+        return response

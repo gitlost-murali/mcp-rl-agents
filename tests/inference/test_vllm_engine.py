@@ -1,10 +1,11 @@
 """Tests for vLLM engine (tests/inference/vllm_engine.py)."""
 
+import os
 import pytest
-import torch
+import time
+import requests
 
 from train_agent.inference import VLLMEngine, VLLMConfig, SamplingConfig
-from train_agent.config import MAX_TURNS
 
 
 TEST_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
@@ -24,95 +25,34 @@ def vllm_config():
 
 @pytest.fixture(scope="module")
 def engine(vllm_config):
+    """Start vLLM server for tests and tear it down after."""
     engine = VLLMEngine(vllm_config)
+
+    # Set the base URL for the client to use
+    os.environ["VLLM_BASE_URL"] = "http://localhost:8000/v1"
+
+    # Start the server
+    engine.start_server(port=8000)
+
+    # Re-initialize client with the correct URL
+    engine._init_client()
+
     yield engine
+
+    # Stop the server
+    engine.stop_server()
     del engine
-    torch.cuda.empty_cache()
 
 
 def test_engine_initialization(engine):
-    assert engine.llm is not None
-    assert engine.tokenizer is not None
-
-
-def test_basic_generation(engine):
-    prompts = ["What is 2+2?", "Name a color."]
-
-    sampling_config = SamplingConfig(
-        temperature=0.7,
-        max_tokens=50
-    )
-
-    results = engine.generate(prompts, sampling_config)
-
-    assert len(results) == 2
-    assert all(isinstance(r, str) for r in results)
-    assert all(len(r) > 0 for r in results)
-
-
-def test_generate_with_messages(engine):
-    messages_list = [
-        [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Say hello."}
-        ],
-        [
-            {"role": "system", "content": "You are a math expert."},
-            {"role": "user", "content": "What is 5+3?"}
-        ]
-    ]
-
-    sampling_config = SamplingConfig(
-        temperature=0.8,
-        max_tokens=100
-    )
-
-    results = engine.generate_with_messages(messages_list, sampling_config)
-
-    assert len(results) == 2
-    assert all(isinstance(r, str) for r in results)
-    assert all(len(r) > 0 for r in results)
-
-
-def test_batched_generation(engine):
-    prompts = [f"Count to {i}" for i in range(1, 6)]
-
-    sampling_config = SamplingConfig(
-        temperature=0.5,
-        max_tokens=30
-    )
-
-    results = engine.generate(prompts, sampling_config)
-
-    assert len(results) == 5
-    assert all(isinstance(r, str) for r in results)
-
-
-def test_get_tokenizer(engine):
-    tokenizer = engine.get_tokenizer()
-
-    assert tokenizer is not None
-
-    test_text = "Hello, world!"
-    tokens = tokenizer.encode(test_text)
-    decoded = tokenizer.decode(tokens)
-
-    assert isinstance(tokens, list)
-    assert isinstance(decoded, str)
+    assert engine.client is not None
 
 
 @pytest.mark.asyncio
-async def test_simple_rollout_simulation(engine):
-    system_prompt = (
-        "You are a helpful AI assistant. "
-        "When you complete the task, respond with 'TASK_COMPLETE: <summary>'."
-    )
-
-    task_description = "Say hello and introduce yourself."
-
+async def test_simple_generation(engine):
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Please complete this task: {task_description}"}
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Say hello and introduce yourself."}
     ]
 
     sampling_config = SamplingConfig(
@@ -120,29 +60,21 @@ async def test_simple_rollout_simulation(engine):
         max_tokens=200
     )
 
-    result = engine.generate_with_messages([messages], sampling_config)
+    response = await engine.generate_with_messages(messages, sampling_config)
 
-    assert len(result) == 1
-    assert isinstance(result[0], str)
-    assert len(result[0]) > 0
+    assert response is not None
+    assert hasattr(response, 'choices')
+    assert len(response.choices) > 0
+    assert response.choices[0].message.content is not None
 
-    print(f"\nGenerated response: {result[0][:200]}")
+    print(f"\nGenerated response: {response.choices[0].message.content[:200]}")
 
 
 @pytest.mark.asyncio
-async def test_batched_rollout_simulation(engine):
-    tasks = [
-        "Count from 1 to 5.",
-        "Name three colors.",
-        "What is 2+2?",
-    ]
-
-    messages_list = [
-        [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": f"Task: {task}"}
-        ]
-        for task in tasks
+async def test_streaming_generation(engine):
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Count from 1 to 5."}
     ]
 
     sampling_config = SamplingConfig(
@@ -150,22 +82,43 @@ async def test_batched_rollout_simulation(engine):
         max_tokens=150
     )
 
-    results = engine.generate_with_messages(messages_list, sampling_config)
+    stream = await engine.generate_with_messages(messages, sampling_config, stream=True)
 
-    assert len(results) == len(tasks)
-    assert all(isinstance(r, str) for r in results)
-    assert all(len(r) > 0 for r in results)
+    chunks = []
+    async for chunk in stream:
+        chunks.append(chunk)
+        if chunk.choices[0].delta.content:
+            print(chunk.choices[0].delta.content, end="", flush=True)
 
-    for task, result in zip(tasks, results):
-        print(f"\nTask: {task}")
-        print(f"Response: {result[:100]}")
+    assert len(chunks) > 0
+    print()
 
 
 @pytest.mark.asyncio
-async def test_multi_turn_conversation(engine):
-    conversation_history = [
-        {"role": "system", "content": "You are a helpful math tutor."},
-        {"role": "user", "content": "What is 5+3?"}
+async def test_tool_calling(engine):
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant with access to tools."},
+        {"role": "user", "content": "What's the weather in San Francisco?"}
+    ]
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather in a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA"
+                        }
+                    },
+                    "required": ["location"]
+                }
+            }
+        }
     ]
 
     sampling_config = SamplingConfig(
@@ -173,46 +126,54 @@ async def test_multi_turn_conversation(engine):
         max_tokens=100
     )
 
-    max_turns = min(3, MAX_TURNS)
+    response = await engine.generate_with_messages(messages, sampling_config, tools=tools)
 
-    for turn in range(max_turns):
-        result = engine.generate_with_messages([conversation_history], sampling_config)
-
-        assert len(result) == 1
-        response = result[0]
-
-        print(f"\nTurn {turn + 1}:")
-        print(f"Response: {response[:100]}")
-
-        conversation_history.append({"role": "assistant", "content": response})
-
-        if turn < max_turns - 1:
-            conversation_history.append({
-                "role": "user",
-                "content": "Thank you. Now what is 10-2?"
-            })
-
-    assert len(conversation_history) > 2
+    assert response is not None
+    assert hasattr(response, 'choices')
+    print(f"\nTool call response: {response.choices[0].message}")
 
 
 @pytest.mark.asyncio
-async def test_rollout_with_different_sampling(engine):
+async def test_streaming_with_tools(engine):
     messages = [
-        {"role": "system", "content": "You are a creative writer."},
-        {"role": "user", "content": "Write a short sentence about a cat."}
+        {"role": "system", "content": "You are a helpful assistant with access to tools."},
+        {"role": "user", "content": "Calculate 23 + 45"}
     ]
 
-    sampling_configs = [
-        SamplingConfig(temperature=0.3, max_tokens=50),
-        SamplingConfig(temperature=0.7, max_tokens=50),
-        SamplingConfig(temperature=1.0, max_tokens=50),
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "calculate",
+                "description": "Perform arithmetic calculation",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "expression": {
+                            "type": "string",
+                            "description": "The arithmetic expression"
+                        }
+                    },
+                    "required": ["expression"]
+                }
+            }
+        }
     ]
 
-    for i, config in enumerate(sampling_configs):
-        result = engine.generate_with_messages([messages], config)
+    sampling_config = SamplingConfig(
+        temperature=0.5,
+        max_tokens=100
+    )
 
-        assert len(result) == 1
-        print(f"\nTemperature {config.temperature}: {result[0][:100]}")
+    stream = await engine.generate_with_messages(messages, sampling_config, tools=tools, stream=True)
+
+    tool_calls = []
+    async for chunk in stream:
+        if chunk.choices[0].delta.tool_calls:
+            tool_calls.extend(chunk.choices[0].delta.tool_calls)
+            print(f"Tool call delta: {chunk.choices[0].delta.tool_calls}")
+
+    print(f"\nCollected tool calls: {tool_calls}")
 
 
 def test_engine_config_from_defaults(engine):
