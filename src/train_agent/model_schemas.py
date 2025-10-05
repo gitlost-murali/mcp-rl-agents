@@ -21,6 +21,12 @@ class TrainingConfig(BaseModel):
     max_training_steps: int = Field(default=1000, description="Maximum training steps (None for unlimited)")
     gradient_clip_val: float = Field(default=1.0, description="Maximum gradient norm for clipping")
 
+    @classmethod
+    def from_config(cls) -> "TrainingConfig":
+        """Create TrainingConfig from config.py TRAINING_CONFIG dict."""
+        from train_agent.config import TRAINING_CONFIG
+        return cls(**TRAINING_CONFIG)
+
 
 class GRPOConfig(BaseModel):
     """Configuration for GRPO (Group Relative Policy Optimization) - RL-specific parameters."""
@@ -41,6 +47,20 @@ class GRPOConfig(BaseModel):
     torch_dtype: str = Field(default="bfloat16", description="Model dtype: float16, bfloat16, float32")
     trust_remote_code: bool = Field(default=True, description="Trust remote code when loading model")
 
+    @classmethod
+    def from_config(cls) -> "GRPOConfig":
+        """Create GRPOConfig from config.py GRPO_CONFIG and TRAINING_CONFIG dicts."""
+        from train_agent.config import GRPO_CONFIG, BASE_MODEL
+        return cls(
+            model_name=BASE_MODEL,
+            training_config=TrainingConfig.from_config(),
+            num_training_inputs=GRPO_CONFIG["num_training_inputs"],
+            rollouts_per_group=GRPO_CONFIG["rollouts_per_group"],
+            groups_per_step=GRPO_CONFIG["groups_per_step"],
+            max_turns=GRPO_CONFIG["max_turns"],
+            advantage_type=GRPO_CONFIG["advantage_type"],
+        )
+
 
 class LoRAConfig(BaseModel):
     """LoRA (Low-Rank Adaptation) configuration."""
@@ -54,6 +74,12 @@ class LoRAConfig(BaseModel):
     adapter_path: Optional[str] = Field(default=None, description="Path to saved LoRA adapter")
     merge_on_load: bool = Field(default=True, description="Whether to merge LoRA into base model before inference")
 
+    @classmethod
+    def from_config(cls) -> "LoRAConfig":
+        """Create LoRAConfig from config.py LORA_CONFIG dict."""
+        from train_agent.config import LORA_CONFIG
+        return cls(**LORA_CONFIG)
+
 
 class VLLMConfig(BaseModel):
     """vLLM inference engine configuration."""
@@ -65,6 +91,19 @@ class VLLMConfig(BaseModel):
     dtype: str = Field(default="auto", description="Model dtype: 'auto', 'float16', 'bfloat16'")
     trust_remote_code: bool = Field(default=True, description="Trust remote code when loading model")
     seed: int = Field(default=42, description="Random seed for reproducibility")
+
+    @classmethod
+    def from_config(cls) -> "VLLMConfig":
+        """Create VLLMConfig from config.py INFERENCE_CONFIG dict."""
+        from train_agent.config import INFERENCE_CONFIG, BASE_MODEL
+        return cls(
+            model_name=BASE_MODEL,
+            max_seq_length=INFERENCE_CONFIG["max_seq_length"],
+            gpu_memory_utilization=INFERENCE_CONFIG["gpu_memory_utilization"],
+            tensor_parallel_size=INFERENCE_CONFIG["tensor_parallel_size"],
+            pipeline_parallel_size=INFERENCE_CONFIG["pipeline_parallel_size"],
+            dtype=INFERENCE_CONFIG["dtype"],
+        )
 
 
 class SamplingConfig(BaseModel):
@@ -80,3 +119,9 @@ class RolloutConfig(BaseModel):
     """Configuration for rollout generation during inference/evaluation."""
     max_turns: int = Field(default=10, description="Maximum conversation turns per rollout")
     sampling_temperature: float = Field(default=0.7, description="Temperature for rollout generation")
+
+    @classmethod
+    def from_config(cls) -> "RolloutConfig":
+        """Create RolloutConfig from config.py ROLLOUT_CONFIG dict."""
+        from train_agent.config import ROLLOUT_CONFIG
+        return cls(**ROLLOUT_CONFIG)

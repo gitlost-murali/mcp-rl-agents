@@ -18,11 +18,6 @@ from train_agent.config import (
     DATASET_FILENAME,
     MODEL_NAME,
     PROJECT_NAME,
-    MAX_SEQ_LENGTH,
-    GPU_MEMORY_UTILIZATION,
-    MAX_TURNS,
-    TRAINING_CONFIG,
-    RULER_MODEL,
     BASE_MODEL,
 )
 from train_agent.inference.vllm_engine import VLLMEngine
@@ -71,16 +66,9 @@ class ModelTrainer:
         Args:
             grpo_config: GRPO configuration. If None, creates default from TRAINING_CONFIG.
         """
-        # Create GRPO config from legacy TRAINING_CONFIG if not provided
+        # Create GRPO config from config.py if not provided
         if grpo_config is None:
-            grpo_config = GRPOConfig(
-                model_name=BASE_MODEL,
-                rollouts_per_group=TRAINING_CONFIG.get("rollouts_per_group", 4),
-                groups_per_step=TRAINING_CONFIG.get("groups_per_step", 2),
-                max_turns=MAX_TURNS,
-            )
-            grpo_config.training_config.learning_rate = TRAINING_CONFIG.get("learning_rate", 1e-5)
-            grpo_config.training_config.num_epochs = TRAINING_CONFIG.get("num_epochs", 1)
+            grpo_config = GRPOConfig.from_config()
 
         self.grpo_config = grpo_config
 
@@ -90,7 +78,8 @@ class ModelTrainer:
         # Initialize inference client for rollouts (vLLM server via OpenAI client)
         # This expects a vLLM server running on localhost:8000 by default
 
-        # engine = VLLMEngine(VLLMConfig())
+        # To start vLLM server with config.py values:
+        # engine = VLLMEngine(VLLMConfig.from_config())
         # engine.start_server()
         # engine._init_client()
         self.inference_client = AsyncOpenAI(
@@ -113,7 +102,7 @@ class ModelTrainer:
         return [
             McpScenario(
                 task_description=scenario["task"],
-                max_turns=MAX_TURNS,
+                max_turns=self.grpo_config.max_turns,
                 scenario_id=scenario.get("id", scenario["task"][:50])
             )
             for scenario in raw_train_scenarios
@@ -122,7 +111,7 @@ class ModelTrainer:
     async def train(self, raw_train_scenarios: list[dict]):
         """Train the model using GRPO with Lightning."""
         print(
-            f"Using config: max_turns={MAX_TURNS}, "
+            f"Using config: max_turns={self.grpo_config.max_turns}, "
             f"rollouts_per_group={self.grpo_config.rollouts_per_group}, "
             f"groups_per_step={self.grpo_config.groups_per_step}, "
             f"num_epochs={self.grpo_config.training_config.num_epochs}, "
@@ -241,7 +230,7 @@ class ModelTrainer:
         val_scenarios = [
             McpScenario(
                 task_description=scenario["task"],
-                max_turns=MAX_TURNS,
+                max_turns=self.grpo_config.max_turns,
                 scenario_id=scenario.get("id", scenario["task"][:50])
             )
             for scenario in raw_val_scenarios
@@ -287,10 +276,10 @@ class ModelTrainer:
     
 
 if __name__ == "__main__":
-    # engine = VLLMEngine(VLLMConfig())
+    # engine = VLLMEngine(VLLMConfig.from_config())
     # engine.start_server()
     # engine._init_client()
-    trainer = ModelTrainer(GRPOConfig())
+    trainer = ModelTrainer(GRPOConfig.from_config())
 
     # asyncio.run(trainer.train(raw_train_scenarios))
     raw_val_scenarios = load_train_and_val_scenarios(DATASET_FILENAME)[1]

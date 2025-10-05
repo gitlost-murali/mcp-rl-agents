@@ -48,7 +48,7 @@ async def generate_dataset_if_not_exists(dataset_filename: str):
 
 async def main():
     await generate_dataset_if_not_exists(DATASET_FILENAME)
-    model_trainer = ModelTrainer(GRPOConfig())
+    model_trainer = ModelTrainer(GRPOConfig.from_config())
     raw_train_scenarios, raw_val_scenarios = load_train_and_val_scenarios(DATASET_FILENAME)
     
     await model_trainer.train(raw_train_scenarios[:2])
