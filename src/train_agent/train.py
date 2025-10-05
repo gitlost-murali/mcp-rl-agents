@@ -35,6 +35,10 @@ from train_agent.training.trajectory import (
     rollout,
     gather_trajectory_groups,
 )
+from train_agent.training.batch_preparation import (
+    prepare_batches_from_trajectory_groups,
+    validate_trajectory_alignment,
+)
 from train_agent.utils.mcp_utils import (
     call_mcp_tool,
     get_content_text,
@@ -85,6 +89,10 @@ class ModelTrainer:
 
         # Initialize inference client for rollouts (vLLM server via OpenAI client)
         # This expects a vLLM server running on localhost:8000 by default
+
+        # engine = VLLMEngine(VLLMConfig())
+        # engine.start_server()
+        # engine._init_client()
         self.inference_client = AsyncOpenAI(
             base_url="http://localhost:8000/v1",
             api_key="EMPTY"  # vLLM doesn't need a real API key
@@ -160,7 +168,24 @@ class ModelTrainer:
                     sampling_config=self.sampling_config,
                     debug=True,
                     mcp_url=settings.mcp_url,
+                    tokenizer=self.lightning_module.tokenizer,  # Pass tokenizer for position tracking
                 )
+
+                print("=" * 80)
+                print(f"Trajectory groups collected: {trajectory_groups[0].trajectories[0].messages[-1]}")
+                print("=" * 80)
+
+                # Validate alignment for first trajectory in each group (sanity check)
+                print("Validating trajectory alignment...")
+                for group_idx, group in enumerate(trajectory_groups):
+                    if group.trajectories:
+                        is_valid = validate_trajectory_alignment(
+                            group.trajectories[0],
+                            self.lightning_module.tokenizer,
+                            verbose=(group_idx == 0),  # Verbose for first group only
+                        )
+                        if not is_valid:
+                            raise ValueError(f"Trajectory alignment validation failed for group {group_idx}")
 
                 # TODO: Implement trajectory scoring/judging using RULER or other judge model
                 # For now, using a placeholder that assigns rewards based on task completion
@@ -173,7 +198,7 @@ class ModelTrainer:
                 # Calculate advantages for each group
                 print("Calculating advantages...")
 
-                training_batches = []
+                advantages_list = []
                 for group in trajectory_groups:
                     # Create GroupRollout for advantage calculation
                     group_rollout = create_group_rollout_from_trajectories(
@@ -187,16 +212,26 @@ class ModelTrainer:
                         group_rollout,
                         advantage_type=self.grpo_config.advantage_type
                     )
+                    advantages_list.append(advantages)
 
-                    # TODO: Prepare batches for Lightning training
-                    # Need to tokenize trajectories and compute old_logprobs
-                    # This requires running inference to get logprobs for each trajectory
                     print(f"  Group {group.scenario_id}: rewards={group.rewards}, advantages={advantages}")
 
-                # TODO: Create DataLoader and run trainer.fit()
-                # This requires implementing a custom Dataset/DataLoader that yields batches
-                # with the format expected by GRPOLightningModule.training_step()
-                print("Training step not yet fully implemented - need to tokenize and compute old_logprobs")
+                # Prepare training batches
+                print("Preparing training batches...")
+                train_dataloader = prepare_batches_from_trajectory_groups(
+                    trajectory_groups=trajectory_groups,
+                    advantages_list=advantages_list,
+                    tokenizer=self.lightning_module.tokenizer,
+                    batch_size=2,  # Small batch size for GPU memory
+                    max_length=8192,
+                )
+
+                # Run training step
+                print(f"Running training on {len(train_dataloader)} batches...")
+                trainer.fit(
+                    self.lightning_module,
+                    train_dataloaders=train_dataloader,
+                )
 
         print("\n=== Training completed ===")
 
@@ -227,6 +262,7 @@ class ModelTrainer:
                 sampling_config=self.sampling_config,
                 debug=True,
                 mcp_url=settings.mcp_url,
+                tokenizer=self.lightning_module.tokenizer,
             )
 
             # Extract the model's response

@@ -1,6 +1,8 @@
 import asyncio
 import os
 
+from train_agent.model_schemas import GRPOConfig
+
 os.environ["CUDA_VISIBLE_DEVICES"] = "0,2,3"
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
@@ -46,11 +48,11 @@ async def generate_dataset_if_not_exists(dataset_filename: str):
 
 async def main():
     await generate_dataset_if_not_exists(DATASET_FILENAME)
-    model_trainer = ModelTrainer()
+    model_trainer = ModelTrainer(GRPOConfig())
     raw_train_scenarios, raw_val_scenarios = load_train_and_val_scenarios(DATASET_FILENAME)
     
-    await model_trainer.train(raw_train_scenarios)
-    await model_trainer.test(raw_val_scenarios)
+    await model_trainer.train(raw_train_scenarios[:2])
+    await model_trainer.test(raw_val_scenarios[:2])
 
 
 def cli():
