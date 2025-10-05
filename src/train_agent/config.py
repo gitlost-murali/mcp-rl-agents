@@ -31,7 +31,7 @@ GRPO_CONFIG = {
 
 # Rollout generation configuration (for inference/evaluation)
 ROLLOUT_CONFIG = {
-    "max_turns": 10,  # Maximum number of turns for rollout generation
+    "max_turns": 5,  # Maximum number of turns for rollout generation
     "sampling_temperature": 0.7,  # Temperature for rollout generation
 }
 
