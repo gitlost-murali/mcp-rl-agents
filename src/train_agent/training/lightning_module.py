@@ -73,18 +73,19 @@ class GRPOLightningModule(pl.LightningModule):
         )
         return outputs.logits
 
-    def compute_sequence_logprobs(
+    def compute_token_logprobs(
         self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        Compute total log probability for each sequence in the batch.
+        Compute token-level log probabilities for each token in the batch.
 
         Args:
             input_ids: Token IDs [batch_size, seq_len]
             attention_mask: Attention mask [batch_size, seq_len] (optional)
 
         Returns:
-            Total log probability per sequence [batch_size]
+            Token-level log probabilities [batch_size, seq_len-1]
+            (seq_len-1 because we predict tokens 1:N from positions 0:N-1)
         """
         # Forward pass to get logits
         logits = self(input_ids, attention_mask)
@@ -94,13 +95,13 @@ class GRPOLightningModule(pl.LightningModule):
 
         # Extract log probs for actual tokens (shift to align predictions with targets)
         # Predictions at positions 0:N-1 predict tokens at positions 1:N
-        new_logprobs = torch.gather(
+        token_logprobs = torch.gather(
             log_probs[:, :-1, :],  # predictions: exclude last position
             dim=-1,
             index=input_ids[:, 1:].unsqueeze(-1)  # targets: exclude first position
-        ).squeeze(-1).sum(dim=-1)  # sum over sequence to get total log prob
+        ).squeeze(-1)  # [batch_size, seq_len-1]
 
-        return new_logprobs
+        return token_logprobs
 
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """
@@ -110,23 +111,32 @@ class GRPOLightningModule(pl.LightningModule):
         {
             'input_ids': [batch_size, seq_len],
             'attention_mask': [batch_size, seq_len],
-            'advantages': [batch_size],
-            'old_logprobs': [batch_size],
+            'loss_mask': [batch_size, seq_len],  # 1 for assistant tokens, 0 for others
+            'old_logprobs': [batch_size, seq_len],  # Token-level old logprobs
+            'advantages': [batch_size],  # Trajectory-level advantages
         }
         """
         input_ids = batch['input_ids']
         attention_mask = batch.get('attention_mask', None)
-        advantages = batch['advantages']
+        loss_mask = batch['loss_mask']
         old_logprobs = batch['old_logprobs']
+        advantages = batch['advantages']
 
-        #  Compute log probabilities for current policy
-        new_logprobs = self.compute_sequence_logprobs(input_ids, attention_mask)
+        # Compute token-level log probabilities for current policy
+        # Returns [batch_size, seq_len-1]
+        new_logprobs = self.compute_token_logprobs(input_ids, attention_mask)
 
-        # Compute GRPO loss
+        # Align old_logprobs and loss_mask to match new_logprobs shape (seq_len-1)
+        # Since we shift by 1 during logprob computation, align masks accordingly
+        old_logprobs_aligned = old_logprobs[:, 1:]  # [batch_size, seq_len-1]
+        loss_mask_aligned = loss_mask[:, 1:]  # [batch_size, seq_len-1]
+
+        # Compute GRPO loss with masking
         loss = compute_drgrpo_loss(
             new_logprobs=new_logprobs,
-            old_logprobs=old_logprobs,
+            old_logprobs=old_logprobs_aligned,
             advantages=advantages,
+            loss_mask=loss_mask_aligned,
             clip_epsilon=self.clip_epsilon,
         )
 
@@ -141,17 +151,23 @@ class GRPOLightningModule(pl.LightningModule):
         """Validation step (optional)."""
         input_ids = batch['input_ids']
         attention_mask = batch.get('attention_mask', None)
-        advantages = batch['advantages']
+        loss_mask = batch['loss_mask']
         old_logprobs = batch['old_logprobs']
+        advantages = batch['advantages']
 
-        # Compute log probabilities for current policy
-        new_logprobs = self.compute_sequence_logprobs(input_ids, attention_mask)
+        # Compute token-level log probabilities for current policy
+        new_logprobs = self.compute_token_logprobs(input_ids, attention_mask)
 
-        # Compute GRPO loss
+        # Align old_logprobs and loss_mask
+        old_logprobs_aligned = old_logprobs[:, 1:]
+        loss_mask_aligned = loss_mask[:, 1:]
+
+        # Compute GRPO loss with masking
         loss = compute_drgrpo_loss(
             new_logprobs=new_logprobs,
-            old_logprobs=old_logprobs,
+            old_logprobs=old_logprobs_aligned,
             advantages=advantages,
+            loss_mask=loss_mask_aligned,
             clip_epsilon=self.clip_epsilon,
         )
 

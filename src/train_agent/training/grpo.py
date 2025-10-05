@@ -178,24 +178,28 @@ def compute_drgrpo_loss(
     new_logprobs: torch.Tensor,
     old_logprobs: torch.Tensor,
     advantages: torch.Tensor,
+    loss_mask: torch.Tensor,
     clip_epsilon: float = 0.2,
 ) -> torch.Tensor:
     """
-    Compute Dr. GRPO loss using clipped PPO-style objective.
+    Compute Dr. GRPO loss using clipped PPO-style objective with token-level masking.
 
     Dr. GRPO removes length normalization, std normalization, and KL regularization
     from standard GRPO, using only the clipped PPO objective.
 
     Args:
-        new_logprobs: Log probabilities from current policy [batch_size]
-        old_logprobs: Log probabilities from reference/old policy [batch_size]
-        advantages: Pre-computed advantages [batch_size]
+        new_logprobs: Token-level log probabilities from current policy [batch_size, seq_len]
+        old_logprobs: Token-level log probabilities from reference/old policy [batch_size, seq_len]
+        advantages: Pre-computed advantages [batch_size] (trajectory-level)
+        loss_mask: Mask for which tokens to include in loss [batch_size, seq_len]
+                   (1 for assistant tokens, 0 for others)
         clip_epsilon: Clipping threshold (default 0.2, giving range [0.8, 1.2])
 
     Returns:
         Scalar loss value (negative of clipped objective)
     """
-    # Compute probability ratio
+    # Compute token-level probability ratios
+    # [batch_size, seq_len]
     prob_ratio = torch.exp(new_logprobs - old_logprobs)
 
     # Apply clipping
@@ -203,14 +207,22 @@ def compute_drgrpo_loss(
     clip_high = 1.0 + clip_epsilon
     clipped_ratio = torch.clamp(prob_ratio, clip_low, clip_high)
 
-    # Compute both objectives
-    unclipped_objective = prob_ratio * advantages
-    clipped_objective = clipped_ratio * advantages
+    # Expand advantages to match token dimension
+    # [batch_size] -> [batch_size, 1] -> [batch_size, seq_len]
+    advantages_expanded = advantages.unsqueeze(-1).expand_as(new_logprobs)
+
+    # Compute both objectives (token-level)
+    unclipped_objective = prob_ratio * advantages_expanded
+    clipped_objective = clipped_ratio * advantages_expanded
 
     # Take minimum (most conservative)
     ppo_objective = torch.min(unclipped_objective, clipped_objective)
 
+    # Apply loss mask to only include assistant tokens
+    masked_objective = ppo_objective * loss_mask
+
+    # Sum over all tokens and batch
     # PPO loss is negative of objective
-    loss = -ppo_objective.sum()
+    loss = -masked_objective.sum()
 
     return loss

@@ -23,7 +23,9 @@ from train_agent.utils.debug_utils import log
 class Trajectory:
     messages: List[Dict[str, Any]]
     reward: float = 0.0
-    token_logprobs: List[List[float]] = field(default_factory=list)  # Per-token logprobs for each turn
+    # Assistant turn data with position tracking for accurate alignment
+    # Each dict contains: 'logprobs', 'start_pos', 'end_pos', 'turn_idx'
+    assistant_turns: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     metrics: Dict[str, Any] = field(default_factory=dict)
     logs: List[str] = field(default_factory=list)
@@ -55,8 +57,14 @@ async def rollout(
     sampling_config: Optional[SamplingConfig] = None,
     debug: bool = False,
     mcp_url: Optional[str] = None,
+    tokenizer: Optional[Any] = None,
 ) -> Trajectory:
-    """Run MCP agent rollout. Expects OpenAI-compatible inference client (vLLM server, etc)."""
+    """
+    Run MCP agent rollout. Expects OpenAI-compatible inference client (vLLM server, etc).
+
+    Args:
+        tokenizer: Required for position tracking. Pass the same tokenizer used for training.
+    """
 
     mcp_url = mcp_url or settings.mcp_url
     sampling_config = sampling_config or SamplingConfig()
@@ -89,6 +97,16 @@ async def rollout(
         num_turns += 1
 
         try:
+            # Tokenize conversation BEFORE this turn to get start position
+            start_pos = None
+            if tokenizer:
+                pre_turn_tokens = tokenizer.apply_chat_template(
+                    traj.messages,
+                    tokenize=True,
+                    add_generation_prompt=False,
+                )
+                start_pos = len(pre_turn_tokens)
+
             if debug:
                 log("LLM request", step=num_turns, model=model_name)
 
@@ -108,11 +126,13 @@ async def rollout(
             msg = choice.message
 
             # Extract per-token log probabilities for this turn
+            turn_logprobs = []
             if choice.logprobs and choice.logprobs.content:
-                turn_token_logprobs = [token_logprob.logprob for token_logprob in choice.logprobs.content]
-                traj.token_logprobs.append(turn_token_logprobs)
+                for token_logprob in choice.logprobs.content:
+                    turn_logprobs.append(token_logprob.logprob)
+
                 if debug:
-                    log(f"Turn {num_turns} collected {len(turn_token_logprobs)} token logprobs")
+                    log(f"Turn {num_turns} collected {len(turn_logprobs)} token logprobs")
 
             assistant_msg = {"role": "assistant", "content": msg.content}
             if msg.tool_calls:
@@ -124,10 +144,34 @@ async def rollout(
                     }
                     for tc in msg.tool_calls
                 ]
-            print("=" * 80)
-            print(f"Assistant message collected: {assistant_msg}")
-            print("=" * 80)
+
+            if debug:
+                print("=" * 80)
+                print(f"Assistant message collected: {assistant_msg}")
+                print("=" * 80)
+
             traj.messages.append(assistant_msg)
+
+            # Tokenize conversation AFTER this turn to get end position
+            if tokenizer and start_pos is not None:
+                post_turn_tokens = tokenizer.apply_chat_template(
+                    traj.messages,
+                    tokenize=True,
+                    add_generation_prompt=False,
+                )
+                end_pos = len(post_turn_tokens)
+
+                # Store the assistant turn with position boundaries
+                traj.assistant_turns.append({
+                    'logprobs': turn_logprobs,
+                    'start_pos': start_pos,
+                    'end_pos': end_pos,
+                    'turn_idx': num_turns,
+                })
+
+                if debug:
+                    log(f"Turn {num_turns} position range: [{start_pos}, {end_pos}), "
+                        f"length={end_pos - start_pos}, logprobs_count={len(turn_logprobs)}")
 
             if msg.tool_calls:
                 for tool_call in msg.tool_calls:
@@ -189,13 +233,14 @@ async def gather_trajectory_groups(
     sampling_config: Optional[SamplingConfig] = None,
     debug: bool = False,
     mcp_url: Optional[str] = None,
+    tokenizer: Optional[Any] = None,
 ) -> List[TrajectoryGroup]:
     """Gather multiple trajectory groups by running rollouts in parallel."""
 
     groups = []
     for scenario in scenarios:
         tasks = [
-            rollout(inference_client, model_name, scenario, sampling_config, debug, mcp_url)
+            rollout(inference_client, model_name, scenario, sampling_config, debug, mcp_url, tokenizer)
             for _ in range(rollouts_per_group)
         ]
         trajectories = await asyncio.gather(*tasks)
