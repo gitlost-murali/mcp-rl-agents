@@ -23,6 +23,7 @@ from train_agent.utils.debug_utils import log
 class Trajectory:
     messages: List[Dict[str, Any]]
     reward: float = 0.0
+    token_logprobs: List[List[float]] = field(default_factory=list)  # Per-token logprobs for each turn
     metadata: Dict[str, Any] = field(default_factory=dict)
     metrics: Dict[str, Any] = field(default_factory=dict)
     logs: List[str] = field(default_factory=list)
@@ -99,10 +100,19 @@ async def rollout(
                 temperature=sampling_config.temperature,
                 top_p=sampling_config.top_p,
                 tool_choice="required", # We always require tools to be called
+                logprobs=True,  # Request log probabilities for each token
+                top_logprobs=1,  # Get top 1 logprob per token (the actual chosen token)
             )
 
             choice = response.choices[0]
             msg = choice.message
+
+            # Extract per-token log probabilities for this turn
+            if choice.logprobs and choice.logprobs.content:
+                turn_token_logprobs = [token_logprob.logprob for token_logprob in choice.logprobs.content]
+                traj.token_logprobs.append(turn_token_logprobs)
+                if debug:
+                    log(f"Turn {num_turns} collected {len(turn_token_logprobs)} token logprobs")
 
             assistant_msg = {"role": "assistant", "content": msg.content}
             if msg.tool_calls:

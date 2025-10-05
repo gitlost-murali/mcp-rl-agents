@@ -233,7 +233,7 @@ class ModelTrainer:
             messages = result_trajectory.messages
             model_response = messages[-1]["content"] if messages else "No response"
 
-            with open(f"model_response_{i}.json", "w") as f:
+            with open(f"debugging_outputs/model_response_{i}.json", "w") as f:
                 json.dump(messages, f, indent=4)
 
             print(f"Model output: {model_response}")
