@@ -12,7 +12,7 @@ import torch
 import numpy as np
 from typing import List, Dict, Any
 from torch.utils.data import Dataset, DataLoader
-from transformers import PreTrainedTokenizer
+from transformers import PreTrainedTokenizer #type: ignore
 
 from train_agent.training.trajectory import Trajectory
 
@@ -50,10 +50,10 @@ def validate_trajectory_alignment(
     total_mismatches = 0
 
     for turn_idx, turn in enumerate(trajectory.assistant_turns):
-        start = turn['start_pos']
-        end = turn['end_pos']
+        start = turn.start_pos
+        end = turn.end_pos
         expected_length = end - start
-        actual_logprob_count = len(turn['logprobs'])
+        actual_logprob_count = len(turn.logprobs)
 
         if expected_length != actual_logprob_count:
             total_mismatches += 1
@@ -108,8 +108,8 @@ def tokenize_trajectory_with_loss_mask(
         return_tensors="pt",
         return_dict=True,
     )
-    input_ids = full_encoding["input_ids"].squeeze(0)
-    attention_mask = full_encoding["attention_mask"].squeeze(0)
+    input_ids = full_encoding["input_ids"].squeeze(0) # type: ignore
+    attention_mask = full_encoding["attention_mask"].squeeze(0) #type:ignore
 
     # Create loss mask and old_logprobs arrays
     seq_len = input_ids.shape[0]
@@ -118,9 +118,9 @@ def tokenize_trajectory_with_loss_mask(
 
     # Use stored position boundaries to place logprobs and loss mask
     for turn in trajectory.assistant_turns:
-        start = turn['start_pos']
-        end = turn['end_pos']
-        turn_logprobs = turn['logprobs']
+        start = turn.start_pos
+        end = turn.end_pos
+        turn_logprobs = turn.logprobs
 
         # Mark these positions in loss mask (handle truncation)
         actual_end = min(end, seq_len)

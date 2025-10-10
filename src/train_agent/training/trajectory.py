@@ -6,6 +6,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel
 from openai import AsyncOpenAI
 from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
 
@@ -19,13 +20,52 @@ from train_agent.utils.settings import settings
 from train_agent.utils.debug_utils import log
 
 
+class AssistantTurn(BaseModel):
+    """Data for a single assistant turn with position tracking."""
+    logprobs: List[float]
+    start_pos: int
+    end_pos: int
+    turn_idx: int
+
+
+def _collect_choice_logprobs(choice_logprobs: Any) -> List[float]:
+    """Flatten logprob entries for assistant content and tool call tokens."""
+    collected: List[float] = []
+
+    if not choice_logprobs:
+        return collected
+
+    content_tokens = getattr(choice_logprobs, "content", None)
+    if content_tokens:
+        for token_logprob in content_tokens:
+            collected.append(token_logprob.logprob)
+
+    tool_call_entries = getattr(choice_logprobs, "tool_calls", None)
+    if tool_call_entries:
+        for tool_call in tool_call_entries:
+            fn_logprobs = getattr(tool_call, "function", None)
+            if not fn_logprobs:
+                continue
+
+            name_tokens = getattr(fn_logprobs, "name", None)
+            if name_tokens:
+                for token_logprob in name_tokens:
+                    collected.append(token_logprob.logprob)
+
+            argument_tokens = getattr(fn_logprobs, "arguments", None)
+            if argument_tokens:
+                for token_logprob in argument_tokens:
+                    collected.append(token_logprob.logprob)
+
+    return collected
+
+
 @dataclass
 class Trajectory:
     messages: List[Dict[str, Any]]
     reward: float = 0.0
     # Assistant turn data with position tracking for accurate alignment
-    # Each dict contains: 'logprobs', 'start_pos', 'end_pos', 'turn_idx'
-    assistant_turns: List[Dict[str, Any]] = field(default_factory=list)
+    assistant_turns: List[AssistantTurn] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     metrics: Dict[str, Any] = field(default_factory=dict)
     logs: List[str] = field(default_factory=list)
@@ -126,10 +166,9 @@ async def rollout(
             msg = choice.message
 
             # Extract per-token log probabilities for this turn
-            turn_logprobs = []
-            if choice.logprobs and choice.logprobs.content:
-                for token_logprob in choice.logprobs.content:
-                    turn_logprobs.append(token_logprob.logprob)
+            turn_logprobs: List[float] = []
+            if choice.logprobs:
+                turn_logprobs = _collect_choice_logprobs(choice.logprobs)
 
                 if debug:
                     log(f"Turn {num_turns} collected {len(turn_logprobs)} token logprobs")
@@ -159,19 +198,24 @@ async def rollout(
                     tokenize=True,
                     add_generation_prompt=False,
                 )
-                end_pos = len(post_turn_tokens)
+                templated_end_pos = len(post_turn_tokens)
+                effective_end_pos = start_pos + len(turn_logprobs)
+                end_pos = min(effective_end_pos, templated_end_pos)
 
                 # Store the assistant turn with position boundaries
-                traj.assistant_turns.append({
-                    'logprobs': turn_logprobs,
-                    'start_pos': start_pos,
-                    'end_pos': end_pos,
-                    'turn_idx': num_turns,
-                })
+                traj.assistant_turns.append(AssistantTurn(
+                    logprobs=turn_logprobs,
+                    start_pos=start_pos,
+                    end_pos=end_pos,
+                    turn_idx=num_turns,
+                ))
 
                 if debug:
-                    log(f"Turn {num_turns} position range: [{start_pos}, {end_pos}), "
-                        f"length={end_pos - start_pos}, logprobs_count={len(turn_logprobs)}")
+                    log(
+                        f"Turn {num_turns} position range: [{start_pos}, {end_pos}), "
+                        f"length={end_pos - start_pos}, logprobs_count={len(turn_logprobs)}, "
+                        f"template_length={templated_end_pos - start_pos}"
+                    )
 
             if msg.tool_calls:
                 for tool_call in msg.tool_calls:

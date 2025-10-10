@@ -22,7 +22,7 @@ class VLLMEngine:
 
     def _init_client(self):
         """Initialize OpenAI client to hit vLLM server."""
-        base_url = os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")
+        base_url = os.environ.get("VLLM_BASE_URL", "http://localhost:8011/v1")
         api_key = os.environ.get("VLLM_API_KEY", "EMPTY")
 
         print(f"Initializing vLLM client with base_url: {base_url}")
@@ -62,7 +62,7 @@ class VLLMEngine:
 
         raise TimeoutError(f"Server failed to start within {timeout} seconds")
 
-    def start_server(self, port: int = 8000, host: str = "0.0.0.0"):
+    def start_server(self, port: int = 8011, host: str = "0.0.0.0"):
         """Start vLLM server as a subprocess."""
         if self.server_process is not None:
             print("Server already running")

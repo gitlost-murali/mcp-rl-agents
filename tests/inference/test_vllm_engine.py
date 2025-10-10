@@ -29,10 +29,10 @@ def engine(vllm_config):
     engine = VLLMEngine(vllm_config)
 
     # Set the base URL for the client to use
-    os.environ["VLLM_BASE_URL"] = "http://localhost:8000/v1"
+    os.environ["VLLM_BASE_URL"] = "http://localhost:8011/v1"
 
     # Start the server
-    engine.start_server(port=8000)
+    engine.start_server(port=8011)
 
     # Re-initialize client with the correct URL
     engine._init_client()

@@ -4,51 +4,26 @@ import asyncio
 import json
 import os
 import random
-from dataclasses import dataclass
-import traceback
 from typing import Optional
 
-import torch
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from train_agent.data.dataset_generator import load_train_and_val_scenarios
+import lightning as pl
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.strategies import FSDPStrategy
 from openai import AsyncOpenAI
+from transformers import AutoTokenizer
 
 from train_agent.config import (
     DATASET_FILENAME,
     MODEL_NAME,
     PROJECT_NAME,
-    MAX_SEQ_LENGTH,
-    GPU_MEMORY_UTILIZATION,
-    MAX_TURNS,
-    TRAINING_CONFIG,
-    RULER_MODEL,
     BASE_MODEL,
 )
-from train_agent.inference.vllm_engine import VLLMEngine
+from train_agent.data.dataset_generator import load_train_and_val_scenarios
 from train_agent.model_schemas import GRPOConfig, SamplingConfig, VLLMConfig
 from train_agent.training.lightning_module import GRPOLightningModule
-from train_agent.training.trajectory import (
-    Trajectory,
-    TrajectoryGroup,
-    McpScenario,
-    rollout,
-    gather_trajectory_groups,
-)
-from train_agent.training.batch_preparation import (
-    prepare_batches_from_trajectory_groups,
-    validate_trajectory_alignment,
-)
-from train_agent.utils.mcp_utils import (
-    call_mcp_tool,
-    get_content_text,
-    get_tool_schemas_from_mcp_with_complete_task_tool,
-)
+from train_agent.training.trajectory import McpScenario, rollout
+from train_agent.inference.vllm_engine import VLLMEngine
 from train_agent.utils.settings import settings
-from train_agent.utils.debug_utils import log, log_json
-
-from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
-from train_agent.training.grpo import calculate_group_advantages, create_group_rollout_from_trajectories
 
 # Optional
 if settings.wandb_api_key:
@@ -66,40 +41,16 @@ random.seed(42)
 
 class ModelTrainer:
     def __init__(self, grpo_config: Optional[GRPOConfig]):
-        """Initialize ModelTrainer with Lightning module and inference client.
+        """Initialize ModelTrainer with merged Lightning module.
 
         Args:
             grpo_config: GRPO configuration. If None, creates default from TRAINING_CONFIG.
         """
-        # Create GRPO config from legacy TRAINING_CONFIG if not provided
+        # Create GRPO config from config.py if not provided
         if grpo_config is None:
-            grpo_config = GRPOConfig(
-                model_name=BASE_MODEL,
-                rollouts_per_group=TRAINING_CONFIG.get("rollouts_per_group", 4),
-                groups_per_step=TRAINING_CONFIG.get("groups_per_step", 2),
-                max_turns=MAX_TURNS,
-            )
-            grpo_config.training_config.learning_rate = TRAINING_CONFIG.get("learning_rate", 1e-5)
-            grpo_config.training_config.num_epochs = TRAINING_CONFIG.get("num_epochs", 1)
+            grpo_config = GRPOConfig.from_config()
 
         self.grpo_config = grpo_config
-
-        # Initialize Lightning module
-        self.lightning_module = GRPOLightningModule(grpo_config)
-
-        # Initialize inference client for rollouts (vLLM server via OpenAI client)
-        # This expects a vLLM server running on localhost:8000 by default
-
-        # engine = VLLMEngine(VLLMConfig())
-        # engine.start_server()
-        # engine._init_client()
-        self.inference_client = AsyncOpenAI(
-            base_url="http://localhost:8000/v1",
-            api_key="EMPTY"  # vLLM doesn't need a real API key
-        )
-
-        # Sampling config for rollouts
-        self.sampling_config = SamplingConfig(temperature=0.7, top_p=0.9, max_tokens=8000)
 
         print("ModelTrainer initialized!")
         print(f"Base model: {BASE_MODEL}")
@@ -108,28 +59,52 @@ class ModelTrainer:
         print(f"Rollouts per group: {grpo_config.rollouts_per_group}")
         print(f"Groups per step: {grpo_config.groups_per_step}")
 
-    def create_scenarios(self, raw_train_scenarios: list[dict]):
+    def create_scenarios(self, raw_train_scenarios: list[dict]) -> list[McpScenario]:
         """Convert raw scenario dicts to McpScenario objects."""
         return [
             McpScenario(
                 task_description=scenario["task"],
-                max_turns=MAX_TURNS,
+                max_turns=self.grpo_config.max_turns,
                 scenario_id=scenario.get("id", scenario["task"][:50])
             )
             for scenario in raw_train_scenarios
         ]
 
-    async def train(self, raw_train_scenarios: list[dict]):
-        """Train the model using GRPO with Lightning."""
+    def train(self, raw_train_scenarios: list[dict]):
+        """Train the model using online GRPO with Lightning.
+
+        The Lightning module now handles:
+        - Online rollout collection (fresh data every step)
+        - vLLM server start/stop for GPU memory management
+        - GRPO loss computation with advantages
+        - All logging and checkpointing
+        """
         print(
-            f"Using config: max_turns={MAX_TURNS}, "
-            f"rollouts_per_group={self.grpo_config.rollouts_per_group}, "
-            f"groups_per_step={self.grpo_config.groups_per_step}, "
-            f"num_epochs={self.grpo_config.training_config.num_epochs}, "
-            f"learning_rate={self.grpo_config.training_config.learning_rate}"
+            f"\nStarting online GRPO training with config:\n"
+            f"  - Max turns: {self.grpo_config.max_turns}\n"
+            f"  - Rollouts per group: {self.grpo_config.rollouts_per_group}\n"
+            f"  - Groups per step: {self.grpo_config.groups_per_step}\n"
+            f"  - Max training steps: {self.grpo_config.training_config.max_training_steps}\n"
+            f"  - Learning rate: {self.grpo_config.training_config.learning_rate}\n"
         )
 
+        # Convert raw scenarios to McpScenario objects
         train_scenarios = self.create_scenarios(raw_train_scenarios)
+        print(f"Loaded {len(train_scenarios)} training scenarios\n")
+
+        # Initialize merged Lightning module with scenarios
+        lightning_module = GRPOLightningModule(
+            grpo_config=self.grpo_config,
+            train_scenarios=train_scenarios,
+            vllm_config=VLLMConfig.from_config(),
+            sampling_config=SamplingConfig(temperature=0.7, top_p=0.9, max_tokens=8000),
+        )
+
+        # Configure FSDP: model loaded once, weights sharded across GPUs
+        strategy = FSDPStrategy(
+            sharding_strategy="FULL_SHARD",
+            state_dict_type="full",
+        )
 
         # Set up Lightning Trainer
         trainer = pl.Trainer(
@@ -145,154 +120,112 @@ class ModelTrainer:
             ],
             gradient_clip_val=self.grpo_config.training_config.gradient_clip_val,
             precision="bf16-mixed" if self.grpo_config.torch_dtype == "bfloat16" else "16-mixed",
-            accelerator="auto",
+            accelerator="gpu",
             devices="auto",
+            strategy=strategy,
+            enable_progress_bar=True,
+            log_every_n_steps=1,
         )
 
-        # Main training loop
-        for epoch in range(self.grpo_config.training_config.num_epochs):
-            print(f"\n=== Epoch {epoch + 1}/{self.grpo_config.training_config.num_epochs} ===")
+        # Start training - Lightning module handles everything!
+        print(f"{'='*80}")
+        print("Starting online GRPO training...")
+        print("Each step collects fresh rollouts from current policy")
+        print(f"{'='*80}\n")
 
-            # Process scenarios in batches (groups_per_step scenarios at a time)
-            for batch_idx in range(0, len(train_scenarios), self.grpo_config.groups_per_step):
-                batch_scenarios = train_scenarios[batch_idx:batch_idx + self.grpo_config.groups_per_step]
-
-                print(f"\nGathering trajectory groups for batch {batch_idx // self.grpo_config.groups_per_step + 1}...")
-
-                # Gather trajectories for this batch
-                trajectory_groups = await gather_trajectory_groups(
-                    inference_client=self.inference_client,
-                    model_name=BASE_MODEL,  # TODO: Use current checkpoint model name
-                    scenarios=batch_scenarios,
-                    rollouts_per_group=self.grpo_config.rollouts_per_group,
-                    sampling_config=self.sampling_config,
-                    debug=True,
-                    mcp_url=settings.mcp_url,
-                    tokenizer=self.lightning_module.tokenizer,  # Pass tokenizer for position tracking
-                )
-
-                print("=" * 80)
-                print(f"Trajectory groups collected: {trajectory_groups[0].trajectories[0].messages[-1]}")
-                print("=" * 80)
-
-                # Validate alignment for first trajectory in each group (sanity check)
-                print("Validating trajectory alignment...")
-                for group_idx, group in enumerate(trajectory_groups):
-                    if group.trajectories:
-                        is_valid = validate_trajectory_alignment(
-                            group.trajectories[0],
-                            self.lightning_module.tokenizer,
-                            verbose=(group_idx == 0),  # Verbose for first group only
-                        )
-                        if not is_valid:
-                            raise ValueError(f"Trajectory alignment validation failed for group {group_idx}")
-
-                # TODO: Implement trajectory scoring/judging using RULER or other judge model
-                # For now, using a placeholder that assigns rewards based on task completion
-                print("Scoring trajectories...")
-                for group in trajectory_groups:
-                    for traj in group.trajectories:
-                        # Simple placeholder: reward 1.0 if completed, 0.0 otherwise
-                        traj.reward = 1.0 if traj.metrics.get("task_completed", False) else 0.0
-
-                # Calculate advantages for each group
-                print("Calculating advantages...")
-
-                advantages_list = []
-                for group in trajectory_groups:
-                    # Create GroupRollout for advantage calculation
-                    group_rollout = create_group_rollout_from_trajectories(
-                        scenario_id=group.scenario_id,
-                        trajectories=group.trajectories,
-                        rewards=group.rewards,
-                    )
-
-                    # Calculate advantages
-                    advantages = calculate_group_advantages(
-                        group_rollout,
-                        advantage_type=self.grpo_config.advantage_type
-                    )
-                    advantages_list.append(advantages)
-
-                    print(f"  Group {group.scenario_id}: rewards={group.rewards}, advantages={advantages}")
-
-                # Prepare training batches
-                print("Preparing training batches...")
-                train_dataloader = prepare_batches_from_trajectory_groups(
-                    trajectory_groups=trajectory_groups,
-                    advantages_list=advantages_list,
-                    tokenizer=self.lightning_module.tokenizer,
-                    batch_size=2,  # Small batch size for GPU memory
-                    max_length=8192,
-                )
-
-                # Run training step
-                print(f"Running training on {len(train_dataloader)} batches...")
-                trainer.fit(
-                    self.lightning_module,
-                    train_dataloaders=train_dataloader,
-                )
+        trainer.fit(lightning_module)
 
         print("\n=== Training completed ===")
 
-    async def test(self, raw_val_scenarios: list[dict]):
-        """Test the trained model on validation scenarios."""
+    async def test(self, raw_val_scenarios: list[dict], checkpoint_path: Optional[str] = None):
+        """Test the trained model on validation scenarios.
+
+        Args:
+            raw_val_scenarios: List of raw scenario dictionaries
+            checkpoint_path: Path to model checkpoint to test (optional)
+        """
         print("Generating test inputs...")
-        val_scenarios = [
-            McpScenario(
-                task_description=scenario["task"],
-                max_turns=MAX_TURNS,
-                scenario_id=scenario.get("id", scenario["task"][:50])
-            )
-            for scenario in raw_val_scenarios
-        ]
+        val_scenarios = self.create_scenarios(raw_val_scenarios)
 
         print(f"\n🧪 Testing the trained model on {len(val_scenarios)} new inputs:\n")
         print("=" * 80)
 
-        for i, scenario in enumerate(val_scenarios[:3]):
-            print(f"\nTest {i + 1}:")
-            print(f"Input: {scenario.task_description}")
+        # Determine which model to use
+        model_name = checkpoint_path or BASE_MODEL
 
-            # Run the model
-            result_trajectory = await rollout(
-                inference_client=self.inference_client,
-                model_name=BASE_MODEL,  # TODO: Use checkpoint model name
-                scenario=scenario,
-                sampling_config=self.sampling_config,
-                debug=True,
-                mcp_url=settings.mcp_url,
-                tokenizer=self.lightning_module.tokenizer,
+        # Start vLLM server for testing
+        print(f"\nStarting vLLM server with model: {model_name}")
+        vllm_config = VLLMConfig.from_config()
+        vllm_config.model_name = model_name
+
+        vllm_engine = VLLMEngine(vllm_config)
+        vllm_engine.start_server(port=8011, host="0.0.0.0")
+
+        try:
+            # Initialize inference client
+            inference_client = AsyncOpenAI(
+                base_url="http://localhost:8011/v1",
+                api_key="EMPTY"
             )
 
-            # Extract the model's response
-            messages = result_trajectory.messages
-            model_response = messages[-1]["content"] if messages else "No response"
+            sampling_config = SamplingConfig(temperature=0.7, top_p=0.9, max_tokens=8000)
 
-            with open(f"debugging_outputs/model_response_{i}.json", "w") as f:
-                json.dump(messages, f, indent=4)
+            # Create temporary tokenizer for testing
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.grpo_config.model_name,
+                trust_remote_code=self.grpo_config.trust_remote_code
+            )
 
-            print(f"Model output: {model_response}")
-            print(f"Task completed: {result_trajectory.metrics.get('task_completed', False)}")
-            print(f"Number of turns: {result_trajectory.metrics.get('num_turns', 0)}")
-            print("-" * 80)
+            for i, scenario in enumerate(val_scenarios[:3]):
+                print(f"\nTest {i + 1}:")
+                print(f"Input: {scenario.task_description}")
 
-        print("\n🎉 Testing completed!")
-        print(f"\nYour model '{MODEL_NAME}' has been trained to use the MCP server at:")
-        print(settings.mcp_url)
-        print("\nTo use this model in production:")
-        print("1. The model checkpoint is saved in ./checkpoints/")
-        print("2. You can load it using the Lightning or transformers library")
-        print("3. Or continue training with more examples by adjusting the configuration")
+                # Run the model
+                result_trajectory = await rollout(
+                    inference_client=inference_client,
+                    model_name=model_name,
+                    scenario=scenario,
+                    sampling_config=sampling_config,
+                    debug=True,
+                    mcp_url=settings.mcp_url,
+                    tokenizer=tokenizer,
+                )
+
+                # Extract the model's response
+                messages = result_trajectory.messages
+                model_response = messages[-1]["content"] if messages else "No response"
+
+                with open(f"debugging_outputs/model_response_{i}.json", "w") as f:
+                    json.dump(messages, f, indent=4)
+
+                print(f"Model output: {model_response}")
+                print(f"Task completed: {result_trajectory.metrics.get('task_completed', False)}")
+                print(f"Number of turns: {result_trajectory.metrics.get('num_turns', 0)}")
+                print("-" * 80)
+
+            print("\n🎉 Testing completed!")
+            print(f"\nYour model '{MODEL_NAME}' has been trained to use the MCP server at:")
+            print(settings.mcp_url)
+            print("\nTo use this model in production:")
+            print("1. The model checkpoint is saved in ./checkpoints/")
+            print("2. You can load it using the Lightning or transformers library")
+            print("3. Or continue training with more examples by adjusting the configuration")
+
+        finally:
+            # Always stop the vLLM server, even if testing fails
+            print("\nStopping vLLM server...")
+            vllm_engine.stop_server()
     
 
 if __name__ == "__main__":
-    # engine = VLLMEngine(VLLMConfig())
-    # engine.start_server()
-    # engine._init_client()
-    trainer = ModelTrainer(GRPOConfig())
+    trainer = ModelTrainer(GRPOConfig.from_config())
 
-    # asyncio.run(trainer.train(raw_train_scenarios))
-    raw_val_scenarios = load_train_and_val_scenarios(DATASET_FILENAME)[1]
-    # raw_val_scenarios = [{"task": "what is taylor swift's most streamed song on spotify?", "difficulty": 3}]
-    asyncio.run(trainer.test(raw_val_scenarios))
+    # Load training and validation scenarios
+    raw_train_scenarios, raw_val_scenarios = load_train_and_val_scenarios(DATASET_FILENAME)
+
+    # Train the model
+    trainer.train(raw_train_scenarios)
+
+    # Optionally test after training
+    # asyncio.run(trainer.test(raw_val_scenarios))
