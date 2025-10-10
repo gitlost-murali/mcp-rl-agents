@@ -6,6 +6,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel
 from openai import AsyncOpenAI
 from openai.types.chat.chat_completion_tool_param import ChatCompletionToolParam
 
@@ -17,6 +18,14 @@ from train_agent.utils.mcp_utils import (
 )
 from train_agent.utils.settings import settings
 from train_agent.utils.debug_utils import log
+
+
+class AssistantTurn(BaseModel):
+    """Data for a single assistant turn with position tracking."""
+    logprobs: List[float]
+    start_pos: int
+    end_pos: int
+    turn_idx: int
 
 
 def _collect_choice_logprobs(choice_logprobs: Any) -> List[float]:
@@ -56,8 +65,7 @@ class Trajectory:
     messages: List[Dict[str, Any]]
     reward: float = 0.0
     # Assistant turn data with position tracking for accurate alignment
-    # Each dict contains: 'logprobs', 'start_pos', 'end_pos', 'turn_idx'
-    assistant_turns: List[Dict[str, Any]] = field(default_factory=list)
+    assistant_turns: List[AssistantTurn] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     metrics: Dict[str, Any] = field(default_factory=dict)
     logs: List[str] = field(default_factory=list)
@@ -195,12 +203,12 @@ async def rollout(
                 end_pos = min(effective_end_pos, templated_end_pos)
 
                 # Store the assistant turn with position boundaries
-                traj.assistant_turns.append({
-                    'logprobs': turn_logprobs,
-                    'start_pos': start_pos,
-                    'end_pos': end_pos,
-                    'turn_idx': num_turns,
-                })
+                traj.assistant_turns.append(AssistantTurn(
+                    logprobs=turn_logprobs,
+                    start_pos=start_pos,
+                    end_pos=end_pos,
+                    turn_idx=num_turns,
+                ))
 
                 if debug:
                     log(
