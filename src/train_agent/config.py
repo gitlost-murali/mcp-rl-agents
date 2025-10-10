@@ -55,7 +55,7 @@ LORA_CONFIG = {
 INFERENCE_CONFIG = {
     "max_seq_length": 65536,  # Maximum sequence length for inference
     "gpu_memory_utilization": 0.6,  # GPU memory usage (0.0-1.0)
-    "tensor_parallel_size": 1,  # Number of GPUs for tensor parallelism
+    "tensor_parallel_size": 2,  # Number of GPUs for tensor parallelism
     "pipeline_parallel_size": 1,  # Number of GPUs for pipeline parallelism
     "dtype": "auto",  # Model dtype: "auto", "float16", "bfloat16"
 }

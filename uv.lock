@@ -1063,6 +1063,26 @@ wheels = [
 ]
 
 [[package]]
+name = "lightning"
+version = "2.5.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec", extra = ["http"] },
+    { name = "lightning-utilities" },
+    { name = "packaging" },
+    { name = "pytorch-lightning" },
+    { name = "pyyaml" },
+    { name = "torch" },
+    { name = "torchmetrics" },
+    { name = "tqdm" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0f/dd/86bb3bebadcdbc6e6e5a63657f0a03f74cd065b5ea965896679f76fec0b4/lightning-2.5.5.tar.gz", hash = "sha256:4d3d66c5b1481364a7e6a1ce8ddde1777a04fa740a3145ec218a9941aed7dd30", size = 640770, upload-time = "2025-09-05T16:01:21.026Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/d0/4b4fbafc3b18df91207a6e46782d9fd1905f9f45cb2c3b8dfbb239aef781/lightning-2.5.5-py3-none-any.whl", hash = "sha256:69eb248beadd7b600bf48eff00a0ec8af171ec7a678d23787c4aedf12e225e8f", size = 828490, upload-time = "2025-09-05T16:01:17.845Z" },
+]
+
+[[package]]
 name = "lightning-utilities"
 version = "0.15.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3240,10 +3260,10 @@ source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "fastmcp" },
+    { name = "lightning" },
     { name = "nest-asyncio" },
     { name = "peft" },
     { name = "pydantic" },
-    { name = "pytorch-lightning" },
     { name = "tenacity" },
     { name = "torch" },
     { name = "transformers" },
@@ -3261,10 +3281,10 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.12.15" },
     { name = "fastmcp", specifier = ">=2.12.4" },
+    { name = "lightning", specifier = ">=2.4.0" },
     { name = "nest-asyncio", specifier = ">=1.5.0" },
     { name = "peft", specifier = ">=0.12.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
-    { name = "pytorch-lightning", specifier = ">=2.4.0" },
     { name = "tenacity", specifier = ">=9.1.2" },
     { name = "torch", specifier = ">=2.5.0" },
     { name = "transformers", specifier = ">=4.44.0" },

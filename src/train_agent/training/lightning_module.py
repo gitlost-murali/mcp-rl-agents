@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 import torch
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
-import pytorch_lightning as pl
+import lightning as pl
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from openai import AsyncOpenAI
 
@@ -321,13 +321,14 @@ class GRPOLightningModule(pl.LightningModule):
         Online GRPO training step - collects fresh rollouts EVERY step.
 
         Flow (happens every single training step):
-        1. Save current model checkpoint
-        2. Start vLLM server with checkpoint
-        3. Collect rollouts from current policy
-        4. Stop vLLM server
-        5. Score trajectories & calculate advantages
-        6. Prepare batches and compute loss on ALL batches
+        1. Start vLLM server with latest checkpoint or a default checkpoint
+        2. Collect rollouts from current policy
+        3. Stop vLLM server
+        4. Score trajectories & calculate advantages
+        5. Prepare batches and compute loss on ALL batches
+        6. Save current model checkpoint for vLLM
         7. Return aggregated loss
+        8. Save current model checkpoint for next step
 
         This is TRUE online policy RL - fresh data every step!
         """
@@ -335,16 +336,10 @@ class GRPOLightningModule(pl.LightningModule):
         print(f"ONLINE TRAINING STEP {self.global_step}")
         print(f"{'='*80}")
 
-        # Step 1: Save current model checkpoint for vLLM
-        checkpoint_path = self._save_model_checkpoint_for_vllm()
 
-        # Store first checkpoint path (used for all subsequent batches)
-        if self.first_checkpoint_path is None:
-            self.first_checkpoint_path = checkpoint_path
-            print(f"First checkpoint saved: {self.first_checkpoint_path}")
-
+        print(f"Starting vLLM server with checkpoint: {self.first_checkpoint_path or self.vllm_config.model_name}")
         # Step 2: Start vLLM server with first checkpoint (always use the first one)
-        self._start_vllm_server(self.first_checkpoint_path)
+        self._start_vllm_server(self.first_checkpoint_path or self.vllm_config.model_name)
 
         # Step 3: Collect rollouts from current policy
         # Handle async call in sync context
@@ -406,6 +401,11 @@ class GRPOLightningModule(pl.LightningModule):
 
         print(f"\nStep {self.global_step} complete: avg_loss={avg_loss.item():.4f}")
         print(f"{'='*80}\n")
+
+        # Step 8: Save current model checkpoint for vLLM
+        if self.global_rank == 0 and self.first_checkpoint_path is None:
+            self.first_checkpoint_path = self._save_model_checkpoint_for_vllm()
+            print(f"checkpoint saved: {self.first_checkpoint_path}")
 
         return avg_loss
 

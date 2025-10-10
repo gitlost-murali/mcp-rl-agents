@@ -6,8 +6,9 @@ import os
 import random
 from typing import Optional
 
-import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+import lightning as pl
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
+from lightning.pytorch.strategies import FSDPStrategy
 from openai import AsyncOpenAI
 from transformers import AutoTokenizer
 
@@ -99,6 +100,12 @@ class ModelTrainer:
             sampling_config=SamplingConfig(temperature=0.7, top_p=0.9, max_tokens=8000),
         )
 
+        # Configure FSDP: model loaded once, weights sharded across GPUs
+        strategy = FSDPStrategy(
+            sharding_strategy="FULL_SHARD",
+            state_dict_type="full",
+        )
+
         # Set up Lightning Trainer
         trainer = pl.Trainer(
             max_steps=self.grpo_config.training_config.max_training_steps,
@@ -113,8 +120,9 @@ class ModelTrainer:
             ],
             gradient_clip_val=self.grpo_config.training_config.gradient_clip_val,
             precision="bf16-mixed" if self.grpo_config.torch_dtype == "bfloat16" else "16-mixed",
-            accelerator="auto",
+            accelerator="gpu",
             devices="auto",
+            strategy=strategy,
             enable_progress_bar=True,
             log_every_n_steps=1,
         )
