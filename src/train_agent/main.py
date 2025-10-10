@@ -3,7 +3,6 @@ import os
 
 from train_agent.model_schemas import GRPOConfig
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,2,3"
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 
 conf = os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "")

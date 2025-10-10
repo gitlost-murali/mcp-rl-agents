@@ -18,8 +18,9 @@ class TrainingConfig(BaseModel):
     weight_decay: float = Field(default=0.01, description="Weight decay for AdamW")
     warmup_steps: int = Field(default=100, description="Number of warmup steps for lr scheduler")
     num_epochs: int = Field(default=1, description="Number of epochs through the dataset")
-    max_training_steps: int = Field(default=1000, description="Maximum training steps (None for unlimited)")
+    max_training_steps: int = Field(default=10, description="Maximum training steps (None for unlimited)")
     gradient_clip_val: float = Field(default=1.0, description="Maximum gradient norm for clipping")
+    batch_size: int = Field(default=2, description="Batch size for training")
 
     @classmethod
     def from_config(cls) -> "TrainingConfig":

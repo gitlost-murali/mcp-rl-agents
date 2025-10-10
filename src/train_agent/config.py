@@ -16,7 +16,7 @@ TRAINING_CONFIG = {
     "weight_decay": 0.01,  # Weight decay for AdamW
     "warmup_steps": 100,  # Number of warmup steps for lr scheduler
     "num_epochs": 1,  # Number of epochs through the dataset
-    "max_training_steps": None,  # Maximum training steps (None for unlimited)
+    "max_training_steps": 4,  # Maximum training steps
     "gradient_clip_val": 1.0,  # Maximum gradient norm for clipping
 }
 
@@ -54,7 +54,7 @@ LORA_CONFIG = {
 # Inference configuration (vLLM)
 INFERENCE_CONFIG = {
     "max_seq_length": 65536,  # Maximum sequence length for inference
-    "gpu_memory_utilization": 0.85,  # GPU memory usage (0.0-1.0)
+    "gpu_memory_utilization": 0.6,  # GPU memory usage (0.0-1.0)
     "tensor_parallel_size": 1,  # Number of GPUs for tensor parallelism
     "pipeline_parallel_size": 1,  # Number of GPUs for pipeline parallelism
     "dtype": "auto",  # Model dtype: "auto", "float16", "bfloat16"
