@@ -94,22 +94,10 @@ class GRPOLightningModule(pl.LightningModule):
         self.checkpoint_dir = tempfile.mkdtemp(prefix="grpo_checkpoint_")
         self.first_checkpoint_path: Optional[str] = None  # Store first checkpoint path
 
-        # Convert dtype string to torch dtype
-        dtype_map = {
-            "bfloat16": torch.bfloat16,
-            "float16": torch.float16,
-            "float32": torch.float32,
-        }
-        torch_dtype = dtype_map.get(grpo_config.torch_dtype, torch.bfloat16)
-
-        # Load model and tokenizer
-        self.model = AutoModelForCausalLM.from_pretrained(
-            grpo_config.model_name,
-            torch_dtype=torch_dtype,
-            trust_remote_code=grpo_config.trust_remote_code,
-            # device_map="auto",
-            # Don't use device_map with PyTorch Lightning - it handles device placement
-        )
+        # Model will be initialized in configure_sharded_model() after FSDP is set up
+        self.model = None
+        
+        # Load tokenizer (lightweight, can be done in __init__)
         self.tokenizer = AutoTokenizer.from_pretrained(
             grpo_config.model_name,
             trust_remote_code=grpo_config.trust_remote_code
@@ -123,8 +111,44 @@ class GRPOLightningModule(pl.LightningModule):
         self.current_step_batches: List[Dict[str, torch.Tensor]] = []
         self.batch_iterator_idx = 0
 
+    def configure_sharded_model(self):
+        """
+        Initialize model AFTER FSDP is set up.
+        
+        This is called by Lightning when using FSDPStrategy, ensuring the model
+        is properly sharded during initialization, preventing each GPU from 
+        loading the full model into memory.
+        
+        Official PyTorch Lightning pattern for efficient FSDP initialization.
+        """
+        if self.model is None:
+            print(f"\n{'='*80}")
+            print(f"Loading model {self.grpo_config.model_name} with FSDP sharding...")
+            print(f"{'='*80}")
+            
+            # Convert dtype string to torch dtype
+            dtype_map = {
+                "bfloat16": torch.bfloat16,
+                "float16": torch.float16,
+                "float32": torch.float32,
+            }
+            torch_dtype = dtype_map.get(self.grpo_config.torch_dtype, torch.bfloat16)
+            
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.grpo_config.model_name,
+                torch_dtype=torch_dtype,
+                trust_remote_code=self.grpo_config.trust_remote_code,
+            )
+            print(f"Model loaded and sharded successfully! (dtype={torch_dtype})")
+            print(f"{'='*80}\n")
+
     def forward(self, input_ids, attention_mask=None):
         """Forward pass through the model."""
+        if self.model is None:
+            raise RuntimeError(
+                "Model not initialized. configure_sharded_model() should have been called by Lightning."
+            )
+        
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,

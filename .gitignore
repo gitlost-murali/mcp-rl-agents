@@ -20,3 +20,5 @@ node-v*
 .vscode/
 
 debugging_outputs/
+vllm_stdout.log
+vllm_stderr.log

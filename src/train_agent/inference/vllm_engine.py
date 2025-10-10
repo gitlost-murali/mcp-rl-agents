@@ -86,8 +86,28 @@ class VLLMEngine:
         if self.config.trust_remote_code:
             cmd.append("--trust-remote-code")
 
+        # Set CUDA_VISIBLE_DEVICES to use GPU 4 (device 3) for vLLM
+        env = os.environ.copy()
+        env["CUDA_VISIBLE_DEVICES"] = "3"
+
         print(f"Starting vLLM server with command: {cmd}")
-        self.server_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print(f"vLLM CUDA_VISIBLE_DEVICES: {env['CUDA_VISIBLE_DEVICES']}")
+
+        # Open log files for vLLM output
+        stdout_log = open("vllm_stdout.log", "a")
+        stderr_log = open("vllm_stderr.log", "a")
+
+        # Write timestamp header to logs
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        stdout_log.write(f"\n{'='*80}\n")
+        stdout_log.write(f"vLLM server started at {timestamp}\n")
+        stdout_log.write(f"{'='*80}\n")
+        stdout_log.flush()
+
+        self.server_process = subprocess.Popen(cmd, stdout=stdout_log, stderr=stderr_log, env=env)
+        self._stdout_log = stdout_log
+        self._stderr_log = stderr_log
 
         # Wait for server to be ready
         print("Waiting for server to start...")
@@ -107,6 +127,14 @@ class VLLMEngine:
         except subprocess.TimeoutExpired:
             self.server_process.kill()
             self.server_process.wait()
+
+        # Close log files
+        if hasattr(self, '_stdout_log'):
+            self._stdout_log.close()
+            delattr(self, '_stdout_log')
+        if hasattr(self, '_stderr_log'):
+            self._stderr_log.close()
+            delattr(self, '_stderr_log')
 
         self.server_process = None
         print("Server stopped")
