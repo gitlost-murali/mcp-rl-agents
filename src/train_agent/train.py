@@ -228,6 +228,12 @@ if __name__ == "__main__":
     # Load training and validation scenarios
     raw_train_scenarios, raw_val_scenarios = load_train_and_val_scenarios(DATASET_FILENAME)
 
+    raw_train_scenarios = [
+        {
+            "task": "What is the 3rd movie of Jr. NTR?",
+            "difficulty": 3
+        }
+    ]
     # Train the model
     trainer.train(raw_train_scenarios)
 

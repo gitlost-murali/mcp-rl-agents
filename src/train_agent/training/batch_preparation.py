@@ -240,7 +240,7 @@ def prepare_training_batches(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
-        num_workers=0,  # Use 0 for debugging, can increase for performance
+        num_workers=8,  # Use 0 for debugging, can increase for performance
         pin_memory=True,
     )
 
