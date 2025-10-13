@@ -3,7 +3,7 @@
 import pytest
 from transformers import AutoTokenizer
 
-from train_agent.training.trajectory import Trajectory
+from train_agent.training.trajectory import AssistantTurn, Trajectory
 from train_agent.training.batch_preparation import (
     tokenize_trajectory_with_loss_mask,
     validate_trajectory_alignment,
@@ -37,12 +37,12 @@ def test_simple_trajectory_alignment(tokenizer):
 
     traj = Trajectory(
         messages=messages,
-        assistant_turns=[{
-            'logprobs': [-0.5] * num_assistant_tokens,
-            'start_pos': start_pos,
-            'end_pos': end_pos,
-            'turn_idx': 1,
-        }],
+        assistant_turns=[AssistantTurn(
+            logprobs=[-0.5] * num_assistant_tokens,
+            start_pos=start_pos,
+            end_pos=end_pos,
+            turn_idx=1,
+        )],
     )
 
     # Should pass validation
