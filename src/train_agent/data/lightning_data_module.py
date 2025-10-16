@@ -6,7 +6,7 @@ import tempfile
 from typing import Dict, List, Optional
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, IterableDataset
 import lightning as pl
 from openai import AsyncOpenAI
 
@@ -365,7 +365,7 @@ class GRPORolloutDataModule(pl.LightningDataModule):
                     yield batch
 
         # Return iterable directly (Lightning handles this)
-        class BatchIterableDataset:
+        class BatchIterableDataset(IterableDataset):
             def __init__(self, generator_fn):
                 self.generator_fn = generator_fn
 
@@ -375,7 +375,7 @@ class GRPORolloutDataModule(pl.LightningDataModule):
         dataset = BatchIterableDataset(batch_generator)
         return DataLoader(dataset, batch_size=None, num_workers=0)
 
-    def val_dataloader(self) -> Optional[DataLoader]:
+    def val_dataloader(self) -> DataLoader:
         if hasattr(self, 'val_dataset'):
             return DataLoader(
                 self.val_dataset,
@@ -383,5 +383,13 @@ class GRPORolloutDataModule(pl.LightningDataModule):
                 num_workers=0,
                 shuffle=False,
             )
-        return None
+        # Return an empty Dataset-backed DataLoader so Lightning's sanity/validation can run without errors
+        class EmptyDataset(Dataset):
+            def __len__(self) -> int:
+                return 0
+
+            def __getitem__(self, idx: int):
+                raise IndexError("Empty dataset")
+
+        return DataLoader(EmptyDataset(), batch_size=1, num_workers=0)
 

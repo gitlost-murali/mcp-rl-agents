@@ -127,6 +127,8 @@ class ModelTrainer:
             strategy=strategy,
             enable_progress_bar=True,
             log_every_n_steps=1,
+            num_sanity_val_steps=0,
+            limit_val_batches=0,
         )
 
         # Start training - Lightning module handles everything!

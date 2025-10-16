@@ -85,7 +85,7 @@ class GRPOLightningModule(pl.LightningModule):
                 self.grpo_config.model_name,
                 torch_dtype=torch_dtype,
                 trust_remote_code=self.grpo_config.trust_remote_code,
-            )
+            ).train()  # Set to training mode (HuggingFace models default to eval)
             print(f"Model loaded and sharded successfully! (dtype={torch_dtype})")
             print(f"{'='*80}\n")
 
