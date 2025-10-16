@@ -115,6 +115,17 @@ class SamplingConfig(BaseModel):
     max_tokens: int = Field(default=8000, description="Maximum tokens to generate")
     stop: Optional[list[str]] = Field(default=None, description="Stop sequences")
 
+    @classmethod
+    def from_config(cls) -> "SamplingConfig":
+        """Create SamplingConfig from config.py ROLLOUT_CONFIG dict."""
+        from train_agent.config import ROLLOUT_CONFIG
+        return cls(
+            temperature=ROLLOUT_CONFIG["sampling_temperature"],
+            top_p=ROLLOUT_CONFIG["sampling_top_p"],
+            top_k=ROLLOUT_CONFIG["sampling_top_k"],
+            max_tokens=ROLLOUT_CONFIG["sampling_max_tokens"],
+            stop=ROLLOUT_CONFIG["sampling_stop"],
+        )
 
 class RolloutConfig(BaseModel):
     """Configuration for rollout generation during inference/evaluation."""
