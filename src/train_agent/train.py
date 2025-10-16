@@ -19,6 +19,7 @@ from train_agent.config import (
     BASE_MODEL,
 )
 from train_agent.data.dataset_generator import load_train_and_val_scenarios
+from train_agent.data.lightning_data_module import GRPORolloutDataModule
 from train_agent.model_schemas import GRPOConfig, SamplingConfig, VLLMConfig
 from train_agent.training.lightning_module import GRPOLightningModule
 from train_agent.training.trajectory import McpScenario, rollout
@@ -92,12 +93,9 @@ class ModelTrainer:
         train_scenarios = self.create_scenarios(raw_train_scenarios)
         print(f"Loaded {len(train_scenarios)} training scenarios\n")
 
-        # Initialize merged Lightning module with scenarios
+        # Initialize Lightning module
         lightning_module = GRPOLightningModule(
             grpo_config=self.grpo_config,
-            train_scenarios=train_scenarios,
-            vllm_config=VLLMConfig.from_config(),
-            sampling_config=SamplingConfig(temperature=0.7, top_p=0.9, max_tokens=8000),
         )
 
         # Configure FSDP: model loaded once, weights sharded across GPUs
@@ -129,6 +127,8 @@ class ModelTrainer:
             strategy=strategy,
             enable_progress_bar=True,
             log_every_n_steps=1,
+            num_sanity_val_steps=0,
+            limit_val_batches=0,
         )
 
         # Start training - Lightning module handles everything!
@@ -137,7 +137,14 @@ class ModelTrainer:
         print("Each step collects fresh rollouts from current policy")
         print(f"{'='*80}\n")
 
-        trainer.fit(lightning_module)
+        data_module = GRPORolloutDataModule(
+            grpo_config=self.grpo_config,
+            train_scenarios=train_scenarios,
+            vllm_config=VLLMConfig.from_config(),
+            sampling_config=SamplingConfig.from_config(),
+        )
+
+        trainer.fit(lightning_module, data_module)
 
         print("\n=== Training completed ===")
 
@@ -172,7 +179,7 @@ class ModelTrainer:
                 api_key="EMPTY"
             )
 
-            sampling_config = SamplingConfig(temperature=0.7, top_p=0.9, max_tokens=8000)
+            sampling_config = SamplingConfig.from_config()
 
             # Create temporary tokenizer for testing
             from transformers import AutoTokenizer

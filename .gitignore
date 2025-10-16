@@ -1,7 +1,7 @@
 .claude/
 .art/
 unsloth_compiled_cache/
-data/
+data/*.json
 # Python-generated files
 __pycache__/
 *.py[oc]

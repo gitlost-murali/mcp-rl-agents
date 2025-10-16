@@ -33,6 +33,10 @@ GRPO_CONFIG = {
 ROLLOUT_CONFIG = {
     "max_turns": 5,  # Maximum number of turns for rollout generation
     "sampling_temperature": 0.7,  # Temperature for rollout generation
+    "sampling_top_p": 0.9,  # Nucleus sampling top-p
+    "sampling_top_k": -1,  # Top-k sampling (-1 for disabled)
+    "sampling_max_tokens": 8000,  # Maximum tokens to generate per turn
+    "sampling_stop": None,  # Stop sequences (None for default)
 }
 
 # Dataset configuration
