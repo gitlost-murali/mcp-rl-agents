@@ -149,9 +149,12 @@ class GRPOLightningModule(pl.LightningModule):
                 "Model not initialized. configure_sharded_model() should have been called by Lightning."
             )
 
-        input_ids = input_ids.to(self.device)
-        if attention_mask is not None:
-            attention_mask = attention_mask.to(self.device)
+        # Ensure tensors are on the same device as the sharded model
+        model_device = next(self.model.parameters()).device
+        if input_ids.device != model_device:
+            input_ids = input_ids.to(model_device)
+        if attention_mask is not None and attention_mask.device != model_device:
+            attention_mask = attention_mask.to(model_device)
 
         outputs = self.model(
             input_ids=input_ids,
@@ -344,6 +347,72 @@ class GRPOLightningModule(pl.LightningModule):
 
         return batches
 
+    def _create_mock_batches(self, num_batches: int = 3, seq_len: int = 512) -> List[Dict[str, torch.Tensor]]:
+        """
+        Create mock batches for testing batch distribution in DDP/FSDP.
+
+        Args:
+            num_batches: Number of batches to create (default: 3)
+            seq_len: Sequence length for each sample (default: 512)
+
+        Returns:
+            List of mock batches matching the expected format:
+            {
+                'input_ids': [batch_size, seq_len],
+                'attention_mask': [batch_size, seq_len],
+                'loss_mask': [batch_size, seq_len],
+                'old_logprobs': [batch_size, seq_len],
+                'advantages': [batch_size],
+            }
+        """
+        print(f"\nCreating {num_batches} mock batches...")
+        print(f"  - Batch size: {self.batch_size}")
+        print(f"  - Sequence length: {seq_len}")
+        print(f"  - Total samples: {num_batches * self.batch_size}")
+
+        vocab_size = self.tokenizer.vocab_size
+        batches = []
+
+        for i in range(num_batches):
+            # Create random input_ids (simulating tokenized sequences)
+            # NOTE: Create on CPU first, will be moved to device in training_step
+            input_ids = torch.randint(
+                low=0, high=vocab_size, size=(self.batch_size, seq_len), dtype=torch.long
+            )
+
+            # Create attention mask (all ones - no padding for simplicity)
+            attention_mask = torch.ones(self.batch_size, seq_len, dtype=torch.long)
+
+            # Create loss mask (randomly mask ~50% of tokens as assistant tokens)
+            # In real scenario, this would be 1 for assistant tokens, 0 for system/user/tool
+            loss_mask = torch.rand(self.batch_size, seq_len) > 0.5
+            loss_mask = loss_mask.float()
+
+            # Create old logprobs (random log probabilities)
+            # Typically these are negative values (log of probabilities)
+            old_logprobs = torch.randn(self.batch_size, seq_len) - 2.0  # roughly in range [-5, 1]
+
+            # Create advantages (one per trajectory/sample in batch)
+            # Typically these are centered around 0 with some positive and negative values
+            advantages = torch.randn(self.batch_size) * 0.5  # roughly in range [-1.5, 1.5]
+
+            batch = {
+                'input_ids': input_ids,
+                'attention_mask': attention_mask,
+                'loss_mask': loss_mask,
+                'old_logprobs': old_logprobs,
+                'advantages': advantages,
+            }
+
+            batches.append(batch)
+
+            print(f"  Mock batch {i+1}/{num_batches} created:")
+            print(f"    - input_ids: {input_ids.shape}")
+            print(f"    - loss_mask sum: {loss_mask.sum().item():.0f} tokens (out of {self.batch_size * seq_len})")
+            print(f"    - advantages mean: {advantages.mean().item():.3f}, std: {advantages.std().item():.3f}")
+
+        return batches
+
     def training_step(self, batch, batch_idx: int) -> torch.Tensor:
         """
         Online GRPO training step - collects fresh rollouts EVERY step.
@@ -389,13 +458,16 @@ class GRPOLightningModule(pl.LightningModule):
 
         for i, training_batch in enumerate(batches):
             # Extract batch data
-            input_ids = training_batch['input_ids'].to(self.device)
+            # Get device from model parameters (works with FSDP)
+            model_device = next(self.model.parameters()).device
+            
+            input_ids = training_batch['input_ids'].to(model_device)
             attention_mask = training_batch.get('attention_mask')
             if attention_mask is not None:
-                attention_mask = attention_mask.to(self.device)
-            loss_mask = training_batch['loss_mask'].to(self.device)
-            old_logprobs = training_batch['old_logprobs'].to(self.device)
-            advantages = training_batch['advantages'].to(self.device)
+                attention_mask = attention_mask.to(model_device)
+            loss_mask = training_batch['loss_mask'].to(model_device)
+            old_logprobs = training_batch['old_logprobs'].to(model_device)
+            advantages = training_batch['advantages'].to(model_device)
 
             # Compute token-level log probabilities for current policy
             new_logprobs = self.compute_token_logprobs(input_ids, attention_mask)
