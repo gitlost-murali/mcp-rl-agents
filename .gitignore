@@ -1,3 +1,4 @@
+*.ipynb
 .claude/
 .art/
 unsloth_compiled_cache/

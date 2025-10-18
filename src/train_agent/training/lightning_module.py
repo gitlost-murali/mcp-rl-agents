@@ -88,6 +88,8 @@ class GRPOLightningModule(pl.LightningModule):
             ).train()  # Set to training mode (HuggingFace models default to eval)
             print(f"Model loaded and sharded successfully! (dtype={torch_dtype})")
             print(f"{'='*80}\n")
+            self.model.gradient_checkpointing_enable()
+
 
     def forward(self, input_ids, attention_mask=None):
         """Forward pass through the model."""
@@ -162,6 +164,10 @@ class GRPOLightningModule(pl.LightningModule):
 
         # Move batch to device
         input_ids = batch['input_ids'].to(model_device)
+
+        print("="*80)
+        print(f"input_ids shape: {input_ids.shape}")
+        print("="*80)
         attention_mask = batch.get('attention_mask')
         if attention_mask is not None:
             attention_mask = attention_mask.to(model_device)

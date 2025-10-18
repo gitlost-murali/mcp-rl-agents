@@ -35,7 +35,7 @@ ROLLOUT_CONFIG = {
     "sampling_temperature": 0.7,  # Temperature for rollout generation
     "sampling_top_p": 0.9,  # Nucleus sampling top-p
     "sampling_top_k": -1,  # Top-k sampling (-1 for disabled)
-    "sampling_max_tokens": 8000,  # Maximum tokens to generate per turn
+    "sampling_max_tokens": 4000,  # Maximum tokens to generate per turn
     "sampling_stop": None,  # Stop sequences (None for default)
 }
 
@@ -57,7 +57,7 @@ LORA_CONFIG = {
 
 # Inference configuration (vLLM)
 INFERENCE_CONFIG = {
-    "max_seq_length": 65536,  # Maximum sequence length for inference
+    "max_seq_length": 8192,  # Maximum sequence length for inference
     "gpu_memory_utilization": 0.85,  # GPU memory usage (0.0-1.0) - GPU 4 only (42GB)
     "tensor_parallel_size": 1,  # Number of GPUs for tensor parallelism (single GPU)
     "pipeline_parallel_size": 1,  # Number of GPUs for pipeline parallelism
