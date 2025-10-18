@@ -221,8 +221,9 @@ def compute_drgrpo_loss(
     # Apply loss mask to only include assistant tokens
     masked_objective = ppo_objective * loss_mask
 
-    # Sum over all tokens and batch
+    # Sum over all tokens and batch, then normalize by number of masked tokens
     # PPO loss is negative of objective
-    loss = -masked_objective.sum()
+    num_masked_tokens = loss_mask.sum()
+    loss = -masked_objective.sum() / (num_masked_tokens + 1e-8)
 
     return loss

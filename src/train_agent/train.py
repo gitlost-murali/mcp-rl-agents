@@ -104,8 +104,8 @@ class ModelTrainer:
         #     state_dict_type="full",
         # )
 
-        # Set CUDA_VISIBLE_DEVICES for PyTorch Lightning to use GPUs 1, 2, 3
-        os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2"
+        # Set CUDA_VISIBLE_DEVICES for PyTorch Lightning to use GPU 1
+        os.environ["CUDA_VISIBLE_DEVICES"] = "1"
         print(f"Lightning CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
 
         # Set up Lightning Trainer
@@ -123,8 +123,8 @@ class ModelTrainer:
             gradient_clip_val=self.grpo_config.training_config.gradient_clip_val,
             precision="bf16-mixed" if self.grpo_config.torch_dtype == "bfloat16" else "16-mixed",
             accelerator="gpu",
-            devices=[0, 1, 2],  # Use 3 GPUs (devices 0, 1, 2 from CUDA_VISIBLE_DEVICES)
-            strategy='ddp',
+            devices=1,  # Use single GPU (GPU 1)
+            strategy='auto',
             enable_progress_bar=True,
             log_every_n_steps=1,
             num_sanity_val_steps=0,

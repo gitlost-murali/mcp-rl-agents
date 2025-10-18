@@ -56,8 +56,8 @@ async def main():
             "difficulty": 3
         }
     ]
-    await model_trainer.train(raw_train_scenarios[:2])
-    await model_trainer.test(raw_val_scenarios[:2])
+    model_trainer.train(raw_train_scenarios[:2])
+    model_trainer.test(raw_val_scenarios[:2])
 
 
 def cli():

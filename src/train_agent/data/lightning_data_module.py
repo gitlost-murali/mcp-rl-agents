@@ -270,6 +270,7 @@ class GRPORolloutDataModule(pl.LightningDataModule):
             tokenizer=lightning_module.tokenizer,
             batch_size=self.grpo_config.training_config.batch_size,
             max_length=self.vllm_config.max_seq_length,
+            crop_to_actual_length=True,
         )
 
         batches = list(train_dataloader)

@@ -86,9 +86,9 @@ class VLLMEngine:
         if self.config.trust_remote_code:
             cmd.append("--trust-remote-code")
 
-        # Set CUDA_VISIBLE_DEVICES to use GPU 4 (device 3) for vLLM
+        # Set CUDA_VISIBLE_DEVICES to use GPU 0 for vLLM
         env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = "3"
+        env["CUDA_VISIBLE_DEVICES"] = "0"
 
         print(f"Starting vLLM server with command: {cmd}")
         print(f"vLLM CUDA_VISIBLE_DEVICES: {env['CUDA_VISIBLE_DEVICES']}")
