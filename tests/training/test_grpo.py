@@ -189,9 +189,10 @@ def test_compute_drgrpo_loss_no_clipping():
 
     loss = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, loss_mask, clip_epsilon=0.2)
 
-    # When no clipping occurs, loss = -sum(exp(new - old) * advantages * mask)
+    # When no clipping occurs, loss = -sum(exp(new - old) * advantages * mask) / num_masked_tokens
     prob_ratio = torch.exp(new_logprobs - old_logprobs)
-    expected_loss = -(prob_ratio * advantages.unsqueeze(-1) * loss_mask).sum()
+    num_masked_tokens = loss_mask.sum()
+    expected_loss = -(prob_ratio * advantages.unsqueeze(-1) * loss_mask).sum() / num_masked_tokens
 
     assert loss.item() == pytest.approx(expected_loss.item(), abs=1e-5)
 
@@ -210,7 +211,8 @@ def test_compute_drgrpo_loss_with_clipping():
     # Second ratio ~0.135 should be clipped to 0.8
     expected_objective = min(1.2 * 1.0, torch.exp(torch.tensor(2.0)).item() * 1.0) + \
                          min(0.8 * 1.0, torch.exp(torch.tensor(-2.0)).item() * 1.0)
-    expected_loss = -expected_objective
+    num_masked_tokens = loss_mask.sum()
+    expected_loss = -expected_objective / num_masked_tokens
 
     assert loss.item() == pytest.approx(expected_loss, abs=1e-5)
 
@@ -252,8 +254,8 @@ def test_compute_drgrpo_loss_clipping_bounds():
 
     loss = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, loss_mask, clip_epsilon=0.2)
 
-    # Ratio should be clipped to 1.2
-    expected_loss = -1.2 * 1.0
+    # Ratio should be clipped to 1.2, then normalized by num_masked_tokens (1)
+    expected_loss = -1.2 * 1.0 / 1.0
     assert loss.item() == pytest.approx(expected_loss, abs=1e-5)
 
     # Test lower bound clipping
@@ -267,8 +269,8 @@ def test_compute_drgrpo_loss_clipping_bounds():
     # Ratio e^-3 ≈ 0.0498 should be clipped to 0.8
     # The clipped objective is 0.8 * 1.0 = 0.8
     # The unclipped objective is ~0.0498 * 1.0 = ~0.0498
-    # min(0.8, 0.0498) = 0.0498, so loss = -0.0498
-    expected_loss = -torch.exp(torch.tensor(-3.0)).item() * 1.0
+    # min(0.8, 0.0498) = 0.0498, so loss = -0.0498 / 1.0
+    expected_loss = -torch.exp(torch.tensor(-3.0)).item() * 1.0 / 1.0
     assert loss.item() == pytest.approx(expected_loss, abs=1e-5)
 
 
@@ -282,8 +284,8 @@ def test_compute_drgrpo_loss_custom_epsilon():
     # With epsilon=0.1, clipping range is [0.9, 1.1]
     loss = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, loss_mask, clip_epsilon=0.1)
 
-    # Ratio e^2 ≈ 7.39 should be clipped to 1.1
-    expected_loss = -1.1 * 1.0
+    # Ratio e^2 ≈ 7.39 should be clipped to 1.1, then normalized by num_masked_tokens (1)
+    expected_loss = -1.1 * 1.0 / 1.0
     assert loss.item() == pytest.approx(expected_loss, abs=1e-5)
 
 
@@ -325,5 +327,7 @@ def test_compute_drgrpo_loss_with_masking():
     full_mask = torch.tensor([[1.0, 1.0, 1.0, 1.0]])  # [1, 4]
     loss_full = compute_drgrpo_loss(new_logprobs, old_logprobs, advantages, full_mask, clip_epsilon=0.2)
 
-    # With mask, loss should be exactly half of full loss (since we mask out half the tokens)
-    assert loss_with_mask.item() == pytest.approx(loss_full.item() / 2.0, abs=1e-5)
+    # With normalization: loss_with_mask = -sum(2 tokens) / 2, loss_full = -sum(4 tokens) / 4
+    # Since all tokens are identical: loss_with_mask = loss_full
+    # (both normalize their respective sums by their token counts)
+    assert loss_with_mask.item() == pytest.approx(loss_full.item(), abs=1e-5)
