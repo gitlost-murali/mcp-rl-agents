@@ -1,11 +1,12 @@
 from typing import Any
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    mcp_url: str
-    mcp_bearer_token: str
-    openrouter_key: str
+    mcp_url: str = Field(default="http://localhost:1234")
+    mcp_bearer_token: str = Field(default="")
+    openrouter_key: str = Field(default="")
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
