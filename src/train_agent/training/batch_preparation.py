@@ -207,6 +207,43 @@ class GRPODataset(Dataset):
         }
 
 
+def crop_collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+    """
+    Custom collate function that crops sequences to actual max length in batch.
+
+    This saves GPU memory by removing unnecessary padding.
+
+    Args:
+        batch: List of samples from GRPODataset
+
+    Returns:
+        Collated batch with sequences cropped to actual max length
+    """
+    # Stack all tensors
+    input_ids = torch.stack([item['input_ids'] for item in batch])
+    attention_mask = torch.stack([item['attention_mask'] for item in batch])
+    loss_mask = torch.stack([item['loss_mask'] for item in batch])
+    old_logprobs = torch.stack([item['old_logprobs'] for item in batch])
+    advantages = torch.stack([item['advantages'] for item in batch])
+
+    # Find actual max length (where attention_mask is 1)
+    max_actual_length = int(attention_mask.sum(dim=1).max().item())
+
+    # Crop all sequence tensors to this length
+    input_ids = input_ids[:, :max_actual_length]
+    attention_mask = attention_mask[:, :max_actual_length]
+    loss_mask = loss_mask[:, :max_actual_length]
+    old_logprobs = old_logprobs[:, :max_actual_length]
+
+    return {
+        'input_ids': input_ids,
+        'attention_mask': attention_mask,
+        'loss_mask': loss_mask,
+        'old_logprobs': old_logprobs,
+        'advantages': advantages,
+    }
+
+
 def prepare_training_batches(
     trajectories: List[Trajectory],
     advantages: np.ndarray,
@@ -214,6 +251,7 @@ def prepare_training_batches(
     batch_size: int = 4,
     max_length: int = 8192,
     shuffle: bool = True,
+    crop_to_actual_length: bool = True,
 ) -> DataLoader:
     """
     Prepare a DataLoader for GRPO training.
@@ -225,6 +263,7 @@ def prepare_training_batches(
         batch_size: Batch size for training
         max_length: Maximum sequence length
         shuffle: Whether to shuffle the dataset
+        crop_to_actual_length: If True, crop sequences to actual max length in each batch
 
     Returns:
         PyTorch DataLoader yielding batches for GRPOLightningModule
@@ -242,6 +281,7 @@ def prepare_training_batches(
         shuffle=shuffle,
         num_workers=8,  # Use 0 for debugging, can increase for performance
         pin_memory=True,
+        collate_fn=crop_collate_fn if crop_to_actual_length else None,
     )
 
     return dataloader
@@ -253,6 +293,7 @@ def prepare_batches_from_trajectory_groups(
     tokenizer: PreTrainedTokenizer,
     batch_size: int = 4,
     max_length: int = 8192,
+    crop_to_actual_length: bool = True,
 ) -> DataLoader:
     """
     Prepare training batches from multiple trajectory groups.
@@ -265,6 +306,7 @@ def prepare_batches_from_trajectory_groups(
         tokenizer: HuggingFace tokenizer
         batch_size: Batch size for training
         max_length: Maximum sequence length
+        crop_to_actual_length: If True, crop sequences to actual max length in each batch
 
     Returns:
         DataLoader with all trajectories from all groups
@@ -289,4 +331,5 @@ def prepare_batches_from_trajectory_groups(
         batch_size=batch_size,
         max_length=max_length,
         shuffle=True,
+        crop_to_actual_length=crop_to_actual_length,
     )

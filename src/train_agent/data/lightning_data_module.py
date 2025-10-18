@@ -138,12 +138,15 @@ class GRPORolloutDataModule(pl.LightningDataModule):
         print(f"Saved checkpoint for vLLM at: {checkpoint_path}")
         return checkpoint_path
 
-    def _start_vllm_server(self, checkpoint_path: str):
-        """Start vLLM server with the current model checkpoint."""
+    def _start_vllm_server(self, use_base_model: bool = True):
+        """Start vLLM server with the base model (development mode - no checkpointing)."""
         global_rank = self.trainer.global_rank
 
-        # Update vLLM config to use the checkpoint
-        self.vllm_config.model_name = checkpoint_path
+        # Development mode: use base model directly instead of checkpoint
+        # This skips checkpoint saving for faster iteration
+        if use_base_model:
+            print(f"[DEV MODE] Using base model: {self.grpo_config.model_name}")
+            # Don't modify vllm_config.model_name - keep it as the base model
 
         # Only rank 0 starts the vLLM server
         if global_rank == 0:
@@ -267,6 +270,7 @@ class GRPORolloutDataModule(pl.LightningDataModule):
             tokenizer=lightning_module.tokenizer,
             batch_size=self.grpo_config.training_config.batch_size,
             max_length=self.vllm_config.max_seq_length,
+            crop_to_actual_length=True,
         )
 
         batches = list(train_dataloader)
@@ -315,25 +319,12 @@ class GRPORolloutDataModule(pl.LightningDataModule):
                 print(f"DataModule: Generating batches for step {step_idx}")
                 print(f"{'='*80}")
 
-                # Save fresh checkpoint every step and start vLLM server
-                global_rank = self.trainer.global_rank
-                if global_rank == 0:
-                    # Save fresh checkpoint with current model parameters
-                    checkpoint = self._save_model_checkpoint_for_vllm()
-                    # Store first checkpoint for potential reuse in other contexts
-                    if self.first_checkpoint_path is None:
-                        self.first_checkpoint_path = checkpoint
-                else:
-                    checkpoint = None
+                # [DEV MODE] Skip checkpoint saving - use base model directly
+                # This allows faster iteration during development
+                print(f"[DEV MODE] Skipping checkpoint saving, using base model directly")
 
-                # Broadcast checkpoint path to all ranks
-                # All ranks know the checkpoint path pattern
-                if checkpoint is None:
-                    lightning_module = self.trainer.lightning_module
-                    checkpoint = os.path.join(self.checkpoint_dir, f"step_{lightning_module.global_step}")
-
-                print(f"Starting vLLM server with checkpoint: {checkpoint}")
-                self._start_vllm_server(checkpoint)
+                # Start vLLM server with base model
+                self._start_vllm_server(use_base_model=True)
 
                 # Collect rollouts
                 import nest_asyncio

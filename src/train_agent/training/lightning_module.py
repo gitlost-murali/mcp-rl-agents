@@ -88,6 +88,8 @@ class GRPOLightningModule(pl.LightningModule):
             ).train()  # Set to training mode (HuggingFace models default to eval)
             print(f"Model loaded and sharded successfully! (dtype={torch_dtype})")
             print(f"{'='*80}\n")
+            self.model.gradient_checkpointing_enable()
+
 
     def forward(self, input_ids, attention_mask=None):
         """Forward pass through the model."""
@@ -160,7 +162,7 @@ class GRPOLightningModule(pl.LightningModule):
         # Get device from model parameters (works with FSDP)
         model_device = next(self.model.parameters()).device
 
-        # Move batch to device
+        # Move batch to device (already cropped by collate_fn in DataLoader)
         input_ids = batch['input_ids'].to(model_device)
         attention_mask = batch.get('attention_mask')
         if attention_mask is not None:
@@ -168,6 +170,10 @@ class GRPOLightningModule(pl.LightningModule):
         loss_mask = batch['loss_mask'].to(model_device)
         old_logprobs = batch['old_logprobs'].to(model_device)
         advantages = batch['advantages'].to(model_device)
+
+        print("="*80)
+        print(f"Batch shape: {input_ids.shape[0]} seqs x {input_ids.shape[1]} tokens (cropped tokens)")
+        print("="*80)
 
         # Compute token-level log probabilities for current policy
         new_logprobs = self.compute_token_logprobs(input_ids, attention_mask)

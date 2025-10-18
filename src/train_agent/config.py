@@ -25,17 +25,17 @@ GRPO_CONFIG = {
     "num_training_inputs": 18,  # Number of training inputs to generate
     "rollouts_per_group": 4,  # Number of rollouts per input group for comparison
     "groups_per_step": 2,  # Number of input groups to process per training step
-    "max_turns": 6,  # Maximum conversation turns per rollout (T4 optimized)
+    "max_turns": 4,  # Maximum conversation turns per rollout (T4 optimized)
     "advantage_type": "mean_normalized",  # Type of advantage calculation
 }
 
 # Rollout generation configuration (for inference/evaluation)
 ROLLOUT_CONFIG = {
-    "max_turns": 5,  # Maximum number of turns for rollout generation
+    "max_turns": 4,  # Maximum number of turns for rollout generation
     "sampling_temperature": 0.7,  # Temperature for rollout generation
     "sampling_top_p": 0.9,  # Nucleus sampling top-p
     "sampling_top_k": -1,  # Top-k sampling (-1 for disabled)
-    "sampling_max_tokens": 8000,  # Maximum tokens to generate per turn
+    "sampling_max_tokens": 4000,  # Maximum tokens to generate per turn
     "sampling_stop": None,  # Stop sequences (None for default)
 }
 
@@ -57,7 +57,7 @@ LORA_CONFIG = {
 
 # Inference configuration (vLLM)
 INFERENCE_CONFIG = {
-    "max_seq_length": 65536,  # Maximum sequence length for inference
+    "max_seq_length": 16384,  # Maximum sequence length for inference
     "gpu_memory_utilization": 0.85,  # GPU memory usage (0.0-1.0) - GPU 4 only (42GB)
     "tensor_parallel_size": 1,  # Number of GPUs for tensor parallelism (single GPU)
     "pipeline_parallel_size": 1,  # Number of GPUs for pipeline parallelism
