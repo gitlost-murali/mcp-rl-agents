@@ -37,6 +37,7 @@ def test_simple_trajectory_alignment(tokenizer):
 
     traj = Trajectory(
         messages=messages,
+        task="What is 2+2?",
         assistant_turns=[AssistantTurn(
             logprobs=[-0.5] * num_assistant_tokens,
             start_pos=start_pos,

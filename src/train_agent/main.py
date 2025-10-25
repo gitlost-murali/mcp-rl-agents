@@ -49,15 +49,8 @@ async def main():
     await generate_dataset_if_not_exists(DATASET_FILENAME)
     model_trainer = ModelTrainer(GRPOConfig.from_config())
     raw_train_scenarios, raw_val_scenarios = load_train_and_val_scenarios(DATASET_FILENAME)
-    
-    raw_train_scenarios = [
-        {
-            "task": "What is the 3rd movie of Jr. NTR?",
-            "difficulty": 3
-        }
-    ]
     model_trainer.train(raw_train_scenarios[:2])
-    model_trainer.test(raw_val_scenarios[:2])
+    await model_trainer.test(raw_val_scenarios[:2])
 
 
 def cli():

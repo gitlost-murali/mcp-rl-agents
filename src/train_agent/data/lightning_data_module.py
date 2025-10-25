@@ -15,6 +15,7 @@ from train_agent.training.trajectory import (
     McpScenario,
     TrajectoryGroup,
     gather_trajectory_groups,
+    check_with_groundtruth,
 )
 from train_agent.training.grpo import (
     calculate_group_advantages,
@@ -61,9 +62,11 @@ class GRPORolloutDataModule(pl.LightningDataModule):
     4. **Stop vLLM Server**: Free GPU memory by stopping vLLM
        - Critical for making GPU memory available for training
        - All ranks wait at barrier after shutdown
-    5. **Score Trajectories**: Assign rewards based on task completion
-       - Currently uses placeholder rewards (1.0 for completed, 0.0 otherwise)
-       - TODO: Implement proper trajectory judging/scoring
+    5. **Score Trajectories**: Assign rewards based on task completion and verification
+       - Two-tier reward system:
+         * 1.0: Task completed AND verified correct with ground truth
+         * 0.2: Task completed (without verification or wrong answer)
+         * 0.0: Task not completed
     6. **Calculate Advantages**: Compute GRPO advantages per trajectory
        - Group rollouts by scenario
        - Calculate relative advantages within each group
@@ -111,7 +114,7 @@ class GRPORolloutDataModule(pl.LightningDataModule):
         # Inference engine and client
         self.inference_engine: Optional[SGLangEngine | VLLMEngine] = None
         self.inference_client: Optional[AsyncOpenAI] = None
-        self.checkpoint_dir = tempfile.mkdtemp(prefix="grpo_checkpoint_")
+        self.checkpoint_dir = "grpo_checkpoint_dir"
         self.server_started = False  # Track if server is already running
 
         # Scenario tracking
@@ -278,7 +281,7 @@ class GRPORolloutDataModule(pl.LightningDataModule):
             scenarios=scenarios,
             rollouts_per_group=self.grpo_config.rollouts_per_group,
             sampling_config=self.sampling_config,
-            debug=True,
+            debug=False,
             mcp_url=settings.mcp_url,
             tokenizer=lightning_module.tokenizer,
         )
@@ -292,11 +295,27 @@ class GRPORolloutDataModule(pl.LightningDataModule):
         """Score trajectories, calculate advantages, and prepare training batches."""
         lightning_module = self.trainer.lightning_module
 
-        # Score trajectories
+        # Score trajectories with two-tier reward system:
+        # - 1.0: Task completed AND verified correct with ground truth
+        # - 0.2: Task completed (without verification or wrong answer)
+        # - 0.0: Task not completed
         print("Scoring trajectories...")
         for group in trajectory_groups:
             for traj in group.trajectories:
-                traj.reward = 1.0 if traj.metrics.get("task_completed", False) else 0.0
+                task_completed = traj.metrics.get("task_completed", False)
+                expected_answer = traj.expected_answer
+
+                if not task_completed:
+                    traj.reward = 0.0
+                    print(f"  ✗ Task not completed - Reward: {traj.reward}")
+                elif expected_answer:
+                    answer_correct = check_with_groundtruth(traj, expected_answer)
+                    traj.reward = 1.0 if answer_correct else 0.2
+                    print(f"  {'✓' if answer_correct else '~'} Expected: '{expected_answer}' - "
+                          f"{'Verified correct' if answer_correct else 'Completed but wrong'} - Reward: {traj.reward}")
+                else:
+                    traj.reward = 0.2
+                    print(f"  ~ Task completed (no ground truth) - Reward: {traj.reward}")
 
         # Calculate advantages
         print("Calculating advantages...")
