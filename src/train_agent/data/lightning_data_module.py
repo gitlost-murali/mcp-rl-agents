@@ -25,6 +25,7 @@ from train_agent.training.batch_preparation import (
     validate_trajectory_alignment,
 )
 from train_agent.inference.vllm_engine import VLLMEngine
+from train_agent.inference.sglang_engine import SGLangEngine
 from train_agent.utils.settings import settings
 
 
@@ -95,21 +96,23 @@ class GRPORolloutDataModule(pl.LightningDataModule):
         val_scenarios: Optional[List[McpScenario]] = None,
         vllm_config: VLLMConfig = VLLMConfig.from_config(),
         sampling_config: SamplingConfig = SamplingConfig(),
+        use_sglang: bool = True,  # Use SGLang by default for better performance
     ):
         super().__init__()
         self.grpo_config = grpo_config
         self.train_scenarios = train_scenarios
         self.val_scenarios = val_scenarios
 
-        # vLLM and sampling configs
+        # Inference backend selection
+        self.use_sglang = use_sglang
         self.vllm_config = vllm_config
         self.sampling_config = sampling_config
 
-        # vLLM engine and client
-        self.vllm_engine: Optional[VLLMEngine] = None
+        # Inference engine and client
+        self.inference_engine: Optional[SGLangEngine | VLLMEngine] = None
         self.inference_client: Optional[AsyncOpenAI] = None
         self.checkpoint_dir = tempfile.mkdtemp(prefix="grpo_checkpoint_")
-        self.first_checkpoint_path: Optional[str] = None
+        self.server_started = False  # Track if server is already running
 
         # Scenario tracking
         self.scenario_idx = 0
@@ -118,10 +121,26 @@ class GRPORolloutDataModule(pl.LightningDataModule):
         self.trainer = None
 
     def setup(self, stage: Optional[str] = None):
+        """Setup datasets and start inference server.
+
+        Starting the server here (instead of in train_dataloader) means:
+        - Server is ready before training begins
+        - Clearer lifecycle management
+        - With SGLang: server stays on for entire training session
+        - With vLLM: server restarts are handled in _update_model_weights()
+        """
         if stage == "fit" or stage is None:
             self.train_dataset = GRPORolloutDataset(self.train_scenarios)
             if self.val_scenarios:
                 self.val_dataset = GRPORolloutDataset(self.val_scenarios)
+
+            # Start inference server once at setup time
+            print(f"\n{'='*80}")
+            print(f"[DataModule Setup] Starting inference server...")
+            print(f"Backend: {'SGLang (with hot weight updates)' if self.use_sglang else 'vLLM (with server restarts)'}")
+            print(f"{'='*80}")
+            self._start_inference_server()
+            print(f"✓ Inference server ready and waiting for training to begin")
 
     def _save_model_checkpoint_for_vllm(self) -> str:
         """Save current model state to a temporary checkpoint for vLLM server."""
@@ -138,52 +157,95 @@ class GRPORolloutDataModule(pl.LightningDataModule):
         print(f"Saved checkpoint for vLLM at: {checkpoint_path}")
         return checkpoint_path
 
-    def _start_vllm_server(self, use_base_model: bool = True):
-        """Start vLLM server with the base model (development mode - no checkpointing)."""
+    def _start_inference_server(self):
+        """Start inference server (SGLang or vLLM) if not already running."""
+        if self.server_started:
+            print("Inference server already running, skipping startup")
+            return
+
         global_rank = self.trainer.global_rank
 
-        # Development mode: use base model directly instead of checkpoint
-        # This skips checkpoint saving for faster iteration
-        if use_base_model:
-            print(f"[DEV MODE] Using base model: {self.grpo_config.model_name}")
-            # Don't modify vllm_config.model_name - keep it as the base model
-
-        # Only rank 0 starts the vLLM server
+        # Only rank 0 starts the inference server
         if global_rank == 0:
-            self.vllm_engine = VLLMEngine(self.vllm_config)
-            self.vllm_engine.start_server(port=8011, host="0.0.0.0")
-            print("vLLM server started for rollout collection on rank 0")
+            if self.use_sglang:
+                print("Starting SGLang server (with weight update support)...")
+                self.inference_engine = SGLangEngine(self.vllm_config)
+                self.inference_engine.start_server(port=30000, host="0.0.0.0")
+                print("✓ SGLang server started for rollout collection on rank 0")
+            else:
+                print("Starting vLLM server (traditional mode)...")
+                self.inference_engine = VLLMEngine(self.vllm_config)
+                self.inference_engine.start_server(port=8011, host="0.0.0.0")
+                print("✓ vLLM server started for rollout collection on rank 0")
         else:
-            print(f"Rank {global_rank} waiting for vLLM server from rank 0...")
+            print(f"Rank {global_rank} waiting for inference server from rank 0...")
 
         # All ranks wait for server to be ready
         if hasattr(self.trainer.strategy, 'barrier'):
             self.trainer.strategy.barrier()
 
         # All ranks initialize inference client
-        self.inference_client = AsyncOpenAI(
-            base_url="http://localhost:8011/v1",
-            api_key="EMPTY"
-        )
+        if self.use_sglang:
+            self.inference_client = AsyncOpenAI(
+                base_url="http://localhost:30000/v1",
+                api_key="EMPTY"
+            )
+        else:
+            self.inference_client = AsyncOpenAI(
+                base_url="http://localhost:8011/v1",
+                api_key="EMPTY"
+            )
 
         if global_rank != 0:
-            print(f"Rank {global_rank} connected to vLLM server")
+            print(f"Rank {global_rank} connected to inference server")
 
-    def _stop_vllm_server(self):
-        """Stop vLLM server to free GPU memory."""
+        self.server_started = True
+
+    def _update_model_weights(self, checkpoint_path: str):
+        """Update model weights in running inference server.
+
+        For SGLang: Hot-swap weights without restart (fast!)
+        For vLLM: Stop and restart server (slow, legacy mode)
+        """
         global_rank = self.trainer.global_rank
 
-        # Only rank 0 stops the vLLM server
-        if global_rank == 0:
-            if self.vllm_engine is not None:
-                self.vllm_engine.stop_server()
-                self.vllm_engine = None
-                print("vLLM server stopped on rank 0")
+        if self.use_sglang:
+            # SGLang: Just update weights, no restart needed!
+            print(f"[SGLang] Updating weights from checkpoint: {checkpoint_path}")
+            if global_rank == 0:
+                success = self.inference_engine.update_weights_from_disk(checkpoint_path)
+                if success:
+                    print("✓ Weights updated successfully (zero downtime!)")
+                else:
+                    print("✗ Weight update failed, consider restarting server")
+
+            # All ranks wait for weight update to complete
+            if hasattr(self.trainer.strategy, 'barrier'):
+                self.trainer.strategy.barrier()
         else:
-            print(f"Rank {global_rank} disconnecting from vLLM server...")
+            # vLLM: Legacy mode - restart server with new checkpoint
+            print(f"[vLLM] Restarting server with checkpoint: {checkpoint_path}")
+            self._stop_inference_server()
+            self.vllm_config.model_name = checkpoint_path
+            self._start_inference_server()
+
+    def _stop_inference_server(self):
+        """Stop inference server to free GPU memory."""
+        global_rank = self.trainer.global_rank
+
+        # Only rank 0 stops the inference server
+        if global_rank == 0:
+            if self.inference_engine is not None:
+                self.inference_engine.stop_server()
+                self.inference_engine = None
+                engine_type = "SGLang" if self.use_sglang else "vLLM"
+                print(f"{engine_type} server stopped on rank 0")
+        else:
+            print(f"Rank {global_rank} disconnecting from inference server...")
 
         # All ranks clear their inference client
         self.inference_client = None
+        self.server_started = False
 
         # All ranks wait for cleanup to complete
         if hasattr(self.trainer.strategy, 'barrier'):
@@ -312,27 +374,28 @@ class GRPORolloutDataModule(pl.LightningDataModule):
         return batches
 
     def train_dataloader(self) -> DataLoader:
-        """Generate batches through full rollout collection pipeline."""
+        """Generate batches through full rollout collection pipeline.
+
+        Note: Inference server is already started in setup(), so we just use it here.
+        """
         def batch_generator():
+            # Server is already running from setup()
             for step_idx in range(self.grpo_config.training_config.max_training_steps):
                 print(f"\n{'='*80}")
                 print(f"DataModule: Generating batches for step {step_idx}")
                 print(f"{'='*80}")
 
-                # [DEV MODE] Skip checkpoint saving - use base model directly
-                # This allows faster iteration during development
-                print(f"[DEV MODE] Skipping checkpoint saving, using base model directly")
-
-                # Start vLLM server with base model
-                self._start_vllm_server(use_base_model=True)
+                # Save checkpoint and update weights (SGLang) or restart server (vLLM)
+                if step_idx > 0:  # Skip on first step (using base model)
+                    checkpoint_path = self._save_model_checkpoint_for_vllm()
+                    self._update_model_weights(checkpoint_path)
+                else:
+                    print(f"Step 0: Using base model directly (no checkpoint needed)")
 
                 # Collect rollouts
                 import nest_asyncio
                 nest_asyncio.apply()
                 trajectory_groups = asyncio.run(self._collect_rollouts_async())
-
-                # Stop vLLM server
-                self._stop_vllm_server()
 
                 # Score and prepare batches
                 batches = self._score_and_prepare_batches(trajectory_groups)
@@ -383,4 +446,17 @@ class GRPORolloutDataModule(pl.LightningDataModule):
                 raise IndexError("Empty dataset")
 
         return DataLoader(EmptyDataset(), batch_size=1, num_workers=0)
+
+    def teardown(self, stage: Optional[str] = None):
+        """Clean up resources when training/testing is complete.
+
+        This stops the inference server to free GPU memory.
+        """
+        if stage == "fit" or stage is None:
+            if self.server_started:
+                print(f"\n{'='*80}")
+                print(f"[DataModule Teardown] Stopping inference server...")
+                print(f"{'='*80}")
+                self._stop_inference_server()
+                print(f"✓ Inference server stopped and GPU memory freed")
 

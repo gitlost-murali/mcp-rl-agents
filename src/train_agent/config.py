@@ -55,13 +55,14 @@ LORA_CONFIG = {
     "merge_on_load": True,  # Whether to merge LoRA into base model before inference
 }
 
-# Inference configuration (vLLM)
+# Inference configuration (vLLM/SGLang)
 INFERENCE_CONFIG = {
     "max_seq_length": 16384,  # Maximum sequence length for inference
     "gpu_memory_utilization": 0.85,  # GPU memory usage (0.0-1.0) - GPU 4 only (42GB)
     "tensor_parallel_size": 1,  # Number of GPUs for tensor parallelism (single GPU)
     "pipeline_parallel_size": 1,  # Number of GPUs for pipeline parallelism
     "dtype": "auto",  # Model dtype: "auto", "float16", "bfloat16"
+    "tool_call_parser": "qwen",  # Tool call parser: "hermes", "qwen25", "llama3", etc. (Qwen3 models use "qwen25" (deprecated), qwen now)
 }
 
 # Convenience constants (for backward compatibility)

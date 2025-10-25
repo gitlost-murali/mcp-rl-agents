@@ -231,6 +231,7 @@ async def rollout(
                                 "tool_call_id": tool_call.id,
                                 "content": "Task marked complete.",
                             })
+                            print(f"Complete rollout trajectory: {traj.messages[-2:]}")
                         else:
                             print(f"Calling tool: {tool_call.function.name} with args: {tool_args}")
                             result = await call_mcp_tool(tool_call.function.name, tool_args, mcp_url)
