@@ -25,3 +25,5 @@ node-v*
 debugging_outputs/
 vllm_stdout.log
 vllm_stderr.log
+sglang_stdout.log
+sglang_stderr.log

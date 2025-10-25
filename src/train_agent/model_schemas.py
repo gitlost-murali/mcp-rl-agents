@@ -92,6 +92,10 @@ class VLLMConfig(BaseModel):
     dtype: str = Field(default="auto", description="Model dtype: 'auto', 'float16', 'bfloat16'")
     trust_remote_code: bool = Field(default=True, description="Trust remote code when loading model")
     seed: int = Field(default=42, description="Random seed for reproducibility")
+    tool_call_parser: Optional[str] = Field(
+        default="hermes",
+        description="Tool call parser type: 'hermes', 'qwen25', 'llama3', etc. Set to None to disable."
+    )
 
     @classmethod
     def from_config(cls) -> "VLLMConfig":
@@ -104,6 +108,7 @@ class VLLMConfig(BaseModel):
             tensor_parallel_size=INFERENCE_CONFIG["tensor_parallel_size"],
             pipeline_parallel_size=INFERENCE_CONFIG["pipeline_parallel_size"],
             dtype=INFERENCE_CONFIG["dtype"],
+            tool_call_parser=INFERENCE_CONFIG.get("tool_call_parser", "hermes"),
         )
 
 

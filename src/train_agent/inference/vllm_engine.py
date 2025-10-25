@@ -79,9 +79,11 @@ class VLLMEngine:
             "--gpu-memory-utilization", str(self.config.gpu_memory_utilization),
             "--tensor-parallel-size", str(self.config.tensor_parallel_size),
             "--dtype", self.config.dtype,
-            "--enable-auto-tool-choice",
-            "--tool-call-parser", "hermes",
         ]
+
+        # Add tool calling support if configured
+        if self.config.tool_call_parser:
+            cmd.extend(["--enable-auto-tool-choice", "--tool-call-parser", self.config.tool_call_parser])
 
         if self.config.trust_remote_code:
             cmd.append("--trust-remote-code")
