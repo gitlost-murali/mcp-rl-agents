@@ -66,7 +66,8 @@ class ModelTrainer:
             McpScenario(
                 task_description=scenario["task"],
                 max_turns=self.grpo_config.max_turns,
-                scenario_id=scenario.get("id", scenario["task"][:50])
+                scenario_id=scenario.get("id", scenario["task"][:50]),
+                expected_answer=scenario.get("expected_answer")
             )
             for scenario in raw_train_scenarios
         ]
@@ -191,6 +192,8 @@ class ModelTrainer:
             for i, scenario in enumerate(val_scenarios[:3]):
                 print(f"\nTest {i + 1}:")
                 print(f"Input: {scenario.task_description}")
+                if scenario.expected_answer:
+                    print(f"Expected answer: {scenario.expected_answer}")
 
                 # Run the model
                 result_trajectory = await rollout(
@@ -232,16 +235,7 @@ class ModelTrainer:
 if __name__ == "__main__":
     trainer = ModelTrainer(GRPOConfig.from_config())
 
-    # Load training and validation scenarios
     raw_train_scenarios, raw_val_scenarios = load_train_and_val_scenarios(DATASET_FILENAME)
-
-    raw_train_scenarios = [
-        {
-            "task": "What is the 3rd movie of Jr. NTR?",
-            "difficulty": 3
-        }
-    ]
-    # Train the model
     trainer.train(raw_train_scenarios)
 
     # Optionally test after training

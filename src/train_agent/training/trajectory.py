@@ -63,9 +63,11 @@ def _collect_choice_logprobs(choice_logprobs: Any) -> List[float]:
 @dataclass
 class Trajectory:
     messages: List[Dict[str, Any]]
+    task: str
     reward: float = 0.0
     # Assistant turn data with position tracking for accurate alignment
     assistant_turns: List[AssistantTurn] = field(default_factory=list)
+    expected_answer: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     metrics: Dict[str, Any] = field(default_factory=dict)
     logs: List[str] = field(default_factory=list)
@@ -88,6 +90,7 @@ class McpScenario:
     task_description: str
     max_turns: int = 10
     scenario_id: Optional[str] = None
+    expected_answer: Optional[str] = None
 
 
 async def rollout(
@@ -111,7 +114,8 @@ async def rollout(
 
     traj = Trajectory(
         messages=[],
-        metadata={"task": scenario.task_description},
+        task=scenario.task_description,
+        expected_answer=scenario.expected_answer,
         metrics={"task_completed": False, "ran_out_of_turns": False, "num_turns": 0},
     )
 
@@ -231,9 +235,11 @@ async def rollout(
                                 "tool_call_id": tool_call.id,
                                 "content": "Task marked complete.",
                             })
-                            print(f"Complete rollout trajectory: {traj.messages[-2:]}")
+                            if debug:
+                                log("Complete rollout trajectory", step=num_turns, model=model_name, messages=traj.messages[-2:])
                         else:
-                            print(f"Calling tool: {tool_call.function.name} with args: {tool_args}")
+                            if debug:
+                                log(f"Calling tool: {tool_call.function.name} with args: {tool_args}")
                             result = await call_mcp_tool(tool_call.function.name, tool_args, mcp_url)
                             content_text = get_content_text(result)
 
@@ -268,6 +274,38 @@ async def rollout(
     traj.metrics["num_turns"] = num_turns
 
     return traj
+
+
+def check_with_groundtruth(trajectory: Trajectory, expected_answer: str) -> bool:
+    """
+    Check if the expected answer is present in the task completion summary.
+
+    Args:
+        trajectory: The trajectory to check
+        expected_answer: The expected answer to look for
+
+    Returns:
+        True if expected_answer (case-insensitive) is found in the summary, False otherwise
+    """
+    if not expected_answer:
+        return True  # If no expected answer, consider it a match
+
+    # Find the complete_task tool call and extract the summary
+    for msg in trajectory.messages:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tool_call in msg["tool_calls"]:
+                if tool_call.get("function", {}).get("name") == "complete_task":
+                    try:
+                        tool_args = json.loads(tool_call["function"].get("arguments", "{}"))
+                        summary = tool_args.get("summary", "")
+
+                        # Simple substring check (case-insensitive)
+                        if expected_answer.lower() in summary.lower():
+                            return True
+                    except json.JSONDecodeError:
+                        continue
+
+    return False
 
 
 async def gather_trajectory_groups(
